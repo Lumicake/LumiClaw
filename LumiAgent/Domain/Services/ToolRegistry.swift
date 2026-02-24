@@ -1093,6 +1093,73 @@ final class ToolRegistry {
             handler: { args in try await ScreenControlTools.runAppleScript(script: args["script"] ?? "") }
         ))
 
+        // MARK: iWork (Pages, Numbers, Keynote) Tools
+
+        register(RegisteredTool(
+            name: "iwork_write_text",
+            description: "Write text directly to the active iWork document (Pages, Numbers, or Keynote) at the current cursor position. Automatically handles escaping.",
+            category: .screenControl,
+            riskLevel: .medium,
+            parameters: AIToolParameters(
+                properties: [
+                    "text": AIToolProperty(type: "string", description: "Text to write to the document")
+                ],
+                required: ["text"]
+            ),
+            handler: { args in try await ScreenControlTools.iworkWriteText(text: args["text"] ?? "") }
+        ))
+
+        register(RegisteredTool(
+            name: "iwork_get_document_info",
+            description: "Get information about the currently active iWork document, including its name and type (Pages document, Numbers spreadsheet, or Keynote presentation).",
+            category: .screenControl,
+            riskLevel: .low,
+            parameters: AIToolParameters(properties: [:], required: []),
+            handler: { _ in try await ScreenControlTools.iworkGetDocumentInfo() }
+        ))
+
+        register(RegisteredTool(
+            name: "iwork_replace_text",
+            description: "Find and replace text in the active Pages document using the Find & Replace dialog. Supports replacing all occurrences or just the first match.",
+            category: .screenControl,
+            riskLevel: .medium,
+            parameters: AIToolParameters(
+                properties: [
+                    "find_text": AIToolProperty(type: "string", description: "Text to find"),
+                    "replace_text": AIToolProperty(type: "string", description: "Text to replace it with"),
+                    "all_occurrences": AIToolProperty(type: "string", description: "true to replace all occurrences, false for first match only", enumValues: ["true", "false"])
+                ],
+                required: ["find_text", "replace_text"]
+            ),
+            handler: { args in
+                try await ScreenControlTools.iworkReplaceText(
+                    findText: args["find_text"] ?? "",
+                    replaceText: args["replace_text"] ?? "",
+                    allOccurrences: args["all_occurrences"]?.lowercased() != "false"
+                )
+            }
+        ))
+
+        register(RegisteredTool(
+            name: "iwork_insert_after_anchor",
+            description: "Find specific anchor text in a Pages document and insert new text after it. Useful for adding content at specific locations.",
+            category: .screenControl,
+            riskLevel: .medium,
+            parameters: AIToolParameters(
+                properties: [
+                    "anchor_text": AIToolProperty(type: "string", description: "Text to find in the document"),
+                    "new_text": AIToolProperty(type: "string", description: "Text to insert after the anchor")
+                ],
+                required: ["anchor_text", "new_text"]
+            ),
+            handler: { args in
+                try await ScreenControlTools.iworkInsertAfterAnchor(
+                    anchorText: args["anchor_text"] ?? "",
+                    newText: args["new_text"] ?? ""
+                )
+            }
+        ))
+
         // MARK: Bluetooth
 
         register(RegisteredTool(

@@ -1043,6 +1043,138 @@ enum ScreenControlTools {
         }
     }
 
+    // MARK: - iWork Tools (Pages, Numbers, Keynote)
+
+    /// Write text to the active iWork document at the cursor position.
+    static func iworkWriteText(text: String) async throws -> String {
+        let safe = text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+        let script = """
+        tell application "System Events"
+            tell process "Pages" to set frontmost to true
+            keystroke "\(safe)"
+        end tell
+        """
+        _ = try await runAppleScript(script: script)
+        return "Text written to iWork document: \(text.prefix(100))"
+    }
+
+    /// Get information about the active iWork document (name, word count, etc).
+    static func iworkGetDocumentInfo() async throws -> String {
+        let script = """
+        tell application "System Events"
+            set frontmostApp to name of (first application process whose frontmost is true)
+        end tell
+
+        if frontmostApp contains "Pages" then
+            tell application "Pages"
+                if (count of documents) > 0 then
+                    set activeDoc to document 1
+                    set docName to name of activeDoc
+                    return "Document: " & docName
+                else
+                    return "No active Pages document"
+                end if
+            end tell
+        else if frontmostApp contains "Numbers" then
+            tell application "Numbers"
+                if (count of documents) > 0 then
+                    set activeDoc to document 1
+                    set docName to name of activeDoc
+                    return "Spreadsheet: " & docName
+                else
+                    return "No active Numbers document"
+                end if
+            end tell
+        else if frontmostApp contains "Keynote" then
+            tell application "Keynote"
+                if (count of presentations) > 0 then
+                    set activePresentation to presentation 1
+                    set docName to name of activePresentation
+                    return "Presentation: " & docName
+                else
+                    return "No active Keynote presentation"
+                end if
+            end tell
+        else
+            return "No iWork app is currently active"
+        end if
+        """
+        return try await runAppleScript(script: script)
+    }
+
+    /// Replace text in the active iWork document using find and replace.
+    static func iworkReplaceText(findText: String, replaceText: String, allOccurrences: Bool = true) async throws -> String {
+        let findSafe = findText
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let replaceSafe = replaceText
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
+        let script = """
+        tell application "System Events"
+            set frontmostApp to name of (first application process whose frontmost is true)
+        end tell
+
+        if frontmostApp contains "Pages" then
+            tell application "Pages"
+                activate
+                tell application "System Events"
+                    keystroke "f" using command down
+                    delay 0.5
+                    keystroke "\(findSafe)"
+                    delay 0.3
+                    key code 48 -- Tab to replace field
+                    keystroke "\(replaceSafe)"
+                    delay 0.2
+                    \(allOccurrences ? "keystroke \"a\" using command down -- Replace All" : "keystroke \"&\" using command down -- Replace")
+                    delay 0.3
+                    key code 53 -- Escape to close find dialog
+                end tell
+                return "Text replaced in Pages document"
+            end tell
+        else
+            return "Find and replace is only supported in Pages currently"
+        end if
+        """
+        return try await runAppleScript(script: script)
+    }
+
+    /// Insert text at a specific position or after finding an anchor text in Pages/iWork.
+    static func iworkInsertAfterAnchor(anchorText: String, newText: String) async throws -> String {
+        let anchorSafe = anchorText
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let newTextSafe = newText
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+
+        let script = """
+        tell application "Pages"
+            activate
+            tell application "System Events"
+                keystroke "f" using command down -- Open Find
+                delay 0.5
+                keystroke "\(anchorSafe)"
+                delay 0.2
+                key code 36 -- Return to find first occurrence
+                delay 0.3
+                key code 53 -- Escape to close find
+                delay 0.2
+                key code 124 -- Right arrow to go past anchor text
+                delay 0.1
+                key code 36 -- Enter a new line
+                keystroke "\(newTextSafe)"
+            end tell
+        end tell
+        """
+        return try await runAppleScript(script: script)
+    }
+
     // MARK: Key Code Lookup
 
     private static func keyNameToCode(_ name: String) -> Int {
