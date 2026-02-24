@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.2
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -6,7 +6,8 @@ import PackageDescription
 let package = Package(
     name: "LumiAgent",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v15),
+        .iOS(.v26)
     ],
     products: [
         .executable(
@@ -37,11 +38,28 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log")
             ],
             path: "LumiAgent",
+            exclude: [
+                "Domain/Models/iOSMainView.swift",
+                "Domain/Services/Info.plist",
+                "Domain/Services/FIXING_BUNDLE_ID_CRASH.md",
+                "Domain/Services/MULTI_PLATFORM_STRATEGY.md",
+                "Domain/Services/iOS_SUPPORT.md",
+                "App/iOS_BUILD_FIXES.md",
+            ],
             resources: [
                 .copy("Resources/Models")
             ],
             swiftSettings: [
+                .swiftLanguageMode(.v5),
                 .unsafeFlags(["-parse-as-library"])
+            ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "LumiAgent/Domain/Services/Info.plist"
+                ])
             ]
         )
     ]

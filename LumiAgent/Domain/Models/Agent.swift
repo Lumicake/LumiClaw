@@ -112,10 +112,20 @@ enum AIProvider: String, Codable, CaseIterable {
             ]
         case .gemini:
             return [
+                // Gemini 3.x
+                "gemini-3.1-pro",
+                "gemini-3.1-flash",
+                "gemini-3.1-flash-lite",
+                "gemini-3.0-pro",
+                "gemini-3.0-flash",
+                "gemini-3.0-flash-lite",
+                "gemini-3-pro",
+                // Gemini 2.x
                 "gemini-2.5-pro-preview-06-05",
                 "gemini-2.5-flash-preview-05-20",
                 "gemini-2.0-flash",
                 "gemini-2.0-flash-lite",
+                // Gemini 1.x
                 "gemini-1.5-pro",
                 "gemini-1.5-flash",
             ]
@@ -217,7 +227,7 @@ struct SecurityPolicy: Codable, Equatable {
 // MARK: - Risk Level
 
 /// Risk level for operations
-enum RiskLevel: String, Codable, Comparable {
+enum RiskLevel: String, Codable, Comparable, CaseIterable {
     case low
     case medium
     case high

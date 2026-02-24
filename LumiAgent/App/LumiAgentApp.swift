@@ -12,25 +12,44 @@ struct LumiAgentApp: App {
     // MARK: - Properties
 
     @StateObject private var appState = AppState()
+    #if os(macOS)
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    #endif
 
     init() {
         // App initialization
+        #if os(macOS)
         setupBundleIdentifier()
+        #endif
     }
 
+    #if os(macOS)
     private func setupBundleIdentifier() {
-        // Inject bundle identifier for Swift Package Manager builds
-        if Bundle.main.bundleIdentifier == nil || Bundle.main.bundleIdentifier?.isEmpty == true {
-            // Set via environment or default
-            let bundleID = ProcessInfo.processInfo.environment["PRODUCT_BUNDLE_IDENTIFIER"] ?? "com.lumiagent.app"
-            print("⚙️ Setting bundle identifier: \(bundleID)")
+        // Check bundle identifier - critical for macOS system APIs
+        let bundleID = Bundle.main.bundleIdentifier
+        if bundleID == nil || bundleID?.isEmpty == true {
+            print("⚠️ WARNING: Bundle identifier is not set!")
+            print("⚠️ This will cause crashes when using screen control, keyboard/mouse events.")
+            print("⚠️ Please set CFBundleIdentifier in your Info.plist or Xcode project settings.")
+            print("⚠️ Recommended: com.lumiagent.app")
+            
+            // For development, you can try setting it via environment
+            // Note: This doesn't always work and is not a proper solution
+            if let envBundleID = ProcessInfo.processInfo.environment["PRODUCT_BUNDLE_IDENTIFIER"] {
+                print("⚙️ Found bundle ID in environment: \(envBundleID)")
+                // Unfortunately, we can't set Bundle.main.bundleIdentifier at runtime
+                // You must configure it in your Xcode project or Info.plist
+            }
+        } else {
+            print("✅ Bundle identifier: \(bundleID!)")
         }
     }
+    #endif
 
     // MARK: - Body
 
     var body: some Scene {
+        #if os(macOS)
         WindowGroup {
             MainWindow()
                 .environmentObject(appState)
@@ -47,6 +66,18 @@ struct LumiAgentApp: App {
             SettingsView()
                 .environmentObject(appState)
         }
+        #else
+        WindowGroup {
+            #if os(iOS)
+            iOSMainView()
+                .environmentObject(appState)
+            #else
+            Text("LumiAgent is only available on macOS and iOS")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            #endif
+        }
+        #endif
     }
 }
 
@@ -58,6 +89,7 @@ private let screenControlToolNames: Set<String> = [
     "type_text", "press_key", "run_applescript", "take_screenshot"
 ]
 
+#if os(macOS)
 /// Captures a specific display and returns JPEG data for direct AI vision input.
 /// `displayID` should be the CGDirectDisplayID of the target screen.
 /// Runs synchronously — call from a background thread / Task.detached.
@@ -96,6 +128,73 @@ private func captureScreenAsJPEG(maxWidth: CGFloat = 1440, displayID: UInt32? = 
 
     return NSBitmapImageRep(cgImage: scaled).representation(using: .jpeg, properties: [.compressionFactor: 0.82])
 }
+
+/// Captures the frontmost non-Lumi window and returns JPEG data.
+/// Falls back to full-screen capture if the window ID cannot be determined.
+/// Runs synchronously — call from a background thread / Task.detached.
+private func captureWindowAsJPEG(maxWidth: CGFloat = 1440) -> Data? {
+    // Find the frontmost window that isn't ours
+    let myPID = ProcessInfo.processInfo.processIdentifier
+    let windowList = CGWindowListCopyWindowInfo(
+        [.optionOnScreenOnly, .excludeDesktopElements],
+        kCGNullWindowID
+    ) as? [[CFString: Any]] ?? []
+
+    var targetWindowID: CGWindowID?
+    for info in windowList {
+        guard let pid = info[kCGWindowOwnerPID] as? Int32,
+              pid != myPID,
+              let layer = info[kCGWindowLayer] as? Int,
+              layer == 0, // normal window layer
+              let wid = info[kCGWindowNumber] as? CGWindowID else { continue }
+        targetWindowID = wid
+        break
+    }
+
+    guard let windowID = targetWindowID else {
+        // Fall back to full-screen capture
+        return captureScreenAsJPEG(maxWidth: maxWidth)
+    }
+
+    let tmpURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("lumi_window_\(UUID().uuidString).png")
+    defer { try? FileManager.default.removeItem(at: tmpURL) }
+
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    proc.arguments = ["-x", "-l", "\(windowID)", tmpURL.path]
+    guard (try? proc.run()) != nil else { return captureScreenAsJPEG(maxWidth: maxWidth) }
+    proc.waitUntilExit()
+    guard proc.terminationStatus == 0 else { return captureScreenAsJPEG(maxWidth: maxWidth) }
+
+    guard let src = CGImageSourceCreateWithURL(tmpURL as CFURL, nil),
+          let cg  = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+        return captureScreenAsJPEG(maxWidth: maxWidth)
+    }
+
+    let origW = CGFloat(cg.width), origH = CGFloat(cg.height)
+    let scale = min(1.0, maxWidth / origW)
+    let tw = Int(origW * scale), th = Int(origH * scale)
+
+    let cs = CGColorSpaceCreateDeviceRGB()
+    guard let ctx = CGContext(data: nil, width: tw, height: th, bitsPerComponent: 8,
+                              bytesPerRow: 0, space: cs,
+                              bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+    else { return nil }
+    ctx.interpolationQuality = .high
+    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: tw, height: th))
+    guard let scaled = ctx.makeImage() else { return nil }
+
+    return NSBitmapImageRep(cgImage: scaled).representation(using: .jpeg, properties: [.compressionFactor: 0.82])
+}
+#else
+/// iOS version - screenshot capture not available on iOS
+private func captureScreenAsJPEG(maxWidth: CGFloat = 1440, displayID: UInt32? = nil) -> Data? {
+    // Screen capture is restricted on iOS for privacy reasons
+    // This would require using the ReplayKit framework for in-app capture
+    return nil
+}
+#endif
 
 // MARK: - App State
 
@@ -153,6 +252,9 @@ class AppState: ObservableObject {
     // MARK: - Settings navigation (sidebar → detail pane)
     @Published var selectedSettingsSection: String? = "apiKeys"
 
+    // MARK: - Health
+    @Published var selectedHealthCategory: HealthCategory? = .activity
+
     // MARK: - Screen Control State
     /// True while the agent is actively running tools in Agent Mode.
     @Published var isAgentControllingScreen = false
@@ -163,20 +265,25 @@ class AppState: ObservableObject {
 
     private let conversationsKey  = "lumiagent.conversations"
     private let automationsKey    = "lumiagent.automations"
+    #if os(macOS)
     private var automationEngine: AutomationEngine?
+    #endif
 
     init() {
         _ = DatabaseManager.shared
         loadAgents()
         loadConversations()
         loadAutomations()
+        #if os(macOS)
         // Register ⌘L global hotkey after init completes
         DispatchQueue.main.async { [weak self] in
             self?.setupGlobalHotkey()
             self?.startAutomationEngine()
         }
+        #endif
     }
 
+    #if os(macOS)
     // MARK: - Global Hotkey
 
     private func setupGlobalHotkey() {
@@ -188,6 +295,15 @@ class AppState: ObservableObject {
             self?.toggleCommandPalette()
         }
         GlobalHotkeyManager.shared.register()
+
+        // Secondary: Ctrl+L — Quick Action Panel
+        GlobalHotkeyManager.shared.onActivate2 = { [weak self] in
+            self?.toggleQuickActionPanel()
+        }
+        GlobalHotkeyManager.shared.registerSecondary(
+            keyCode: GlobalHotkeyManager.KeyCode.L,
+            modifiers: GlobalHotkeyManager.Modifiers.control
+        )
     }
 
     func toggleCommandPalette() {
@@ -195,6 +311,53 @@ class AppState: ObservableObject {
             self?.sendCommandPaletteMessage(text: text, agentId: agentId)
         }
     }
+
+    func toggleQuickActionPanel() {
+        QuickActionPanelController.shared.toggle { [weak self] actionType in
+            self?.sendQuickAction(type: actionType)
+        }
+    }
+
+    func sendQuickAction(type: QuickActionType) {
+        guard let targetAgent = agents.first else {
+            print("⚠️ No agents available for quick action")
+            return
+        }
+
+        // Run entirely in the background — no focus steal, no screen-control overlay.
+        // The agent acts directly on the current page.
+        Task {
+            let jpeg: Data? = await Task.detached(priority: .userInitiated) {
+                switch type {
+                case .analyzePage:
+                    return captureWindowAsJPEG(maxWidth: 1440)
+                case .thinkAndWrite, .writeNew:
+                    return captureScreenAsJPEG(maxWidth: 1440)
+                }
+            }.value
+
+            // Find or create DM (updates conversation list but doesn't navigate to it)
+            let convId: UUID
+            if let existing = conversations.first(where: { !$0.isGroup && $0.participantIds == [targetAgent.id] }) {
+                convId = existing.id
+            } else {
+                let conv = Conversation(participantIds: [targetAgent.id])
+                conversations.insert(conv, at: 0)
+                convId = conv.id
+            }
+
+            guard let convIndex = conversations.firstIndex(where: { $0.id == convId }) else { return }
+
+            let userMsg = SpaceMessage(role: .user, content: type.prompt, imageData: jpeg)
+            conversations[convIndex].messages.append(userMsg)
+            conversations[convIndex].updatedAt = Date()
+
+            let history = conversations[convIndex].messages.filter { !$0.isStreaming }
+            await streamResponse(from: targetAgent, in: convId,
+                                 history: history, agentMode: true)
+        }
+    }
+    #endif
 
     /// Routes a command-palette submission into the normal agent-mode send path.
     func sendCommandPaletteMessage(text: String, agentId: UUID?) {
@@ -206,17 +369,21 @@ class AppState: ObservableObject {
         sendMessage(text, in: conv.id, agentMode: true)
 
         // Bring our window to front so the user sees the response
+        #if os(macOS)
         NSApp.activate(ignoringOtherApps: true)
+        #endif
     }
 
     // MARK: - Automation management
 
+    #if os(macOS)
     private func startAutomationEngine() {
         automationEngine = AutomationEngine { [weak self] rule in
             self?.fireAutomation(rule)
         }
         automationEngine?.update(rules: automations)
     }
+    #endif
 
     func createAutomation() {
         let rule = AutomationRule(agentId: agents.first?.id)
@@ -226,7 +393,9 @@ class AppState: ObservableObject {
 
     func runAutomation(id: UUID) {
         guard let rule = automations.first(where: { $0.id == id }) else { return }
+        #if os(macOS)
         automationEngine?.runManually(rule)
+        #endif
     }
 
     private func fireAutomation(_ rule: AutomationRule) {
@@ -439,7 +608,7 @@ class AppState: ObservableObject {
         let isGroup = convParticipants.count > 1
         var aiMessages: [AIMessage] = history.compactMap { msg in
             if msg.role == .user {
-                return AIMessage(role: .user, content: msg.content)
+                return AIMessage(role: .user, content: msg.content, imageData: msg.imageData)
             } else if let senderId = msg.agentId {
                 if senderId == agent.id {
                     // Own previous message → assistant role
@@ -459,6 +628,7 @@ class AppState: ObservableObject {
         // the user having to pre-enable individual tools.
         // Outside Agent Mode, respect the agent's explicit enabledTools list.
         var tools: [AITool]
+        #if os(macOS)
         if agentMode {
             tools = ToolRegistry.shared.getToolsForAI() // all tools, no filter
         } else {
@@ -468,6 +638,9 @@ class AppState: ObservableObject {
            let selfTool = ToolRegistry.shared.getTool(named: "update_self") {
             tools.append(selfTool.toAITool())
         }
+        #else
+        tools = []
+        #endif
 
         // In a group chat, prepend context so each agent knows who else is present
         let effectiveSystemPrompt: String? = {
@@ -672,6 +845,7 @@ class AppState: ObservableObject {
                         if Task.isCancelled { break }
 
                         let result: String
+                        #if os(macOS)
                         if toolCall.name == "update_self" {
                             result = applySelfUpdate(toolCall.arguments, agentId: agent.id)
                         } else if let tool = ToolRegistry.shared.getTool(named: toolCall.name) {
@@ -680,6 +854,9 @@ class AppState: ObservableObject {
                         } else {
                             result = "Tool not found: \(toolCall.name)"
                         }
+                        #else
+                        result = "Tools not available on this platform"
+                        #endif
                         recordToolCall(agentId: agent.id, agentName: agent.name,
                                        toolName: toolCall.name, arguments: toolCall.arguments,
                                        result: result)
@@ -701,6 +878,7 @@ class AppState: ObservableObject {
                     // send the raw screenshot to the model. Vision-capable models
                     // (GPT-4o, Claude, Gemini) read the image and decide what to
                     // click / type next without any intermediate parsing.
+                    #if os(macOS)
                     if agentMode && touchedScreen && !Task.isCancelled {
                         // Give the UI time to settle before capturing
                         try? await Task.sleep(nanoseconds: 900_000_000) // 0.9 s
@@ -733,6 +911,7 @@ class AppState: ObservableObject {
                             ))
                         }
                     }
+                    #endif
                 }
                 if finalContent.isEmpty { updatePlaceholder("(no response)") }
             }
@@ -807,6 +986,7 @@ class AppState: ObservableObject {
 enum SidebarItem: String, CaseIterable, Identifiable {
     case agents     = "Agents"
     case agentSpace = "Agent Space"
+    case health     = "Health"
     case history    = "History"
     case automation = "Automations"
     case settings   = "Settings"
@@ -817,6 +997,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .agents:     return "cpu"
         case .agentSpace: return "bubble.left.and.bubble.right.fill"
+        case .health:     return "heart.fill"
         case .history:    return "clock.arrow.circlepath"
         case .automation: return "bolt.horizontal"
         case .settings:   return "gear"

@@ -66,7 +66,7 @@ enum AppConfig {
     static let defaultModels: [AIProvider: String] = [
         .openai: "gpt-4.1",
         .anthropic: "claude-sonnet-4-6",
-        .gemini: "gemini-2.5-flash-preview-05-20",
+        .gemini: "gemini-3.1-flash",
         .ollama: "llama3.3:latest"
     ]
 

@@ -7,6 +7,7 @@
 //  Central registry for all available tools
 //
 
+#if os(macOS)
 import Foundation
 
 // MARK: - Tool Registry
@@ -1248,7 +1249,7 @@ final class ToolRegistry {
     }
 }
 
-// MARK: - Registered Tool
+/// MARK: - Registered Tool
 
 struct RegisteredTool {
     let name: String
@@ -1423,3 +1424,4 @@ enum ToolError: Error, LocalizedError {
         }
     }
 }
+#endif

@@ -2,14 +2,15 @@
 //  GlobalHotkeyManager.swift
 //  LumiAgent
 //
-//  Registers a system-wide hotkey using Carbon's RegisterEventHotKey.
+//  Registers system-wide hotkeys using Carbon's RegisterEventHotKey.
 //  This properly *intercepts* the key — it never reaches the frontmost app —
 //  unlike NSEvent.addGlobalMonitorForEvents which only observes.
 //
-//  Default: ⌥⌘L  (Option + Command + L)
-//  Change by calling register(keyCode:modifiers:) with different values.
+//  Primary:   ⌥⌘L  (Option + Command + L)
+//  Secondary: ^L   (Control + L)
 //
 
+#if os(macOS)
 import Carbon.HIToolbox
 import Foundation
 
@@ -36,16 +37,19 @@ final class GlobalHotkeyManager {
     static let shared = GlobalHotkeyManager()
 
     private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyRef2: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
 
-    /// Called on the main thread when the hotkey is pressed.
+    /// Called on the main thread when the primary hotkey is pressed.
     var onActivate: (() -> Void)?
+    /// Called on the main thread when the secondary hotkey is pressed.
+    var onActivate2: (() -> Void)?
 
     private init() {}
 
     // MARK: Register / Unregister
 
-    /// Register the global hotkey. Safe to call multiple times — re-registers.
+    /// Register the primary global hotkey. Safe to call multiple times — re-registers.
     func register(keyCode: UInt32 = KeyCode.L,
                   modifiers: UInt32 = Modifiers.option | Modifiers.command) {
         unregister()
@@ -60,12 +64,33 @@ final class GlobalHotkeyManager {
 
         InstallEventHandler(
             GetApplicationEventTarget(),
-            { (_, _, userInfo) -> OSStatus in
-                guard let ptr = userInfo else { return OSStatus(eventNotHandledErr) }
+            { (_, event, userInfo) -> OSStatus in
+                guard let ptr = userInfo, let event = event else { return OSStatus(eventNotHandledErr) }
                 let mgr = Unmanaged<GlobalHotkeyManager>
                     .fromOpaque(ptr)
                     .takeUnretainedValue()
-                DispatchQueue.main.async { mgr.onActivate?() }
+
+                // Determine which hotkey fired by reading the EventHotKeyID
+                var hkID = EventHotKeyID()
+                let err = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hkID
+                )
+                guard err == noErr else { return OSStatus(eventNotHandledErr) }
+
+                switch hkID.id {
+                case 1:
+                    DispatchQueue.main.async { mgr.onActivate?() }
+                case 2:
+                    DispatchQueue.main.async { mgr.onActivate2?() }
+                default:
+                    return OSStatus(eventNotHandledErr)
+                }
                 return noErr
             },
             1,
@@ -83,8 +108,68 @@ final class GlobalHotkeyManager {
         )
     }
 
+    /// Register a secondary global hotkey (e.g. Ctrl+L for quick action panel).
+    func registerSecondary(keyCode: UInt32 = KeyCode.L,
+                           modifiers: UInt32 = Modifiers.control) {
+        unregisterSecondary()
+
+        // If the event handler isn't installed yet (e.g. registerSecondary called
+        // before register), install it now.
+        if eventHandlerRef == nil {
+            var spec = EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: OSType(kEventHotKeyPressed)
+            )
+            let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+            InstallEventHandler(
+                GetApplicationEventTarget(),
+                { (_, event, userInfo) -> OSStatus in
+                    guard let ptr = userInfo, let event = event else { return OSStatus(eventNotHandledErr) }
+                    let mgr = Unmanaged<GlobalHotkeyManager>
+                        .fromOpaque(ptr)
+                        .takeUnretainedValue()
+                    var hkID = EventHotKeyID()
+                    let err = GetEventParameter(
+                        event,
+                        EventParamName(kEventParamDirectObject),
+                        EventParamType(typeEventHotKeyID),
+                        nil,
+                        MemoryLayout<EventHotKeyID>.size,
+                        nil,
+                        &hkID
+                    )
+                    guard err == noErr else { return OSStatus(eventNotHandledErr) }
+                    switch hkID.id {
+                    case 1:  DispatchQueue.main.async { mgr.onActivate?() }
+                    case 2:  DispatchQueue.main.async { mgr.onActivate2?() }
+                    default: return OSStatus(eventNotHandledErr)
+                    }
+                    return noErr
+                },
+                1,
+                &spec,
+                selfPtr,
+                &eventHandlerRef
+            )
+        }
+
+        // 'LUM2' as FourCharCode = 0x4C554D32
+        var hkID = EventHotKeyID(signature: 0x4C554D32, id: 2)
+        RegisterEventHotKey(
+            keyCode, modifiers, hkID,
+            GetApplicationEventTarget(), 0,
+            &hotKeyRef2
+        )
+    }
+
     func unregister() {
         if let ref = hotKeyRef   { UnregisterEventHotKey(ref); hotKeyRef = nil }
+        if let ref = hotKeyRef2  { UnregisterEventHotKey(ref); hotKeyRef2 = nil }
         if let ref = eventHandlerRef { RemoveEventHandler(ref); eventHandlerRef = nil }
     }
+
+    func unregisterSecondary() {
+        if let ref = hotKeyRef2  { UnregisterEventHotKey(ref); hotKeyRef2 = nil }
+    }
 }
+#endif

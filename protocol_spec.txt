@@ -1,0 +1,879 @@
+================================================================================
+  LUMI AGENT — REAL-TIME MESSAGING PROTOCOL SPECIFICATION
+  For implementation by GCP server agent (SQLite3 + REST + WebSocket)
+================================================================================
+
+DOCUMENT PURPOSE
+----------------
+This file is the complete specification for the Lumi Agent peer messaging
+protocol. It covers:
+  1.  System overview & architecture
+  2.  User / handle system (linked to the in-app sign-in / sign-up)
+  3.  SQLite3 database schema (full DDL)
+  4.  REST API gateway — every endpoint, request, and response
+  5.  WebSocket real-time protocol — every event in both directions
+  6.  Authentication flow (JWT)
+  7.  Handle-linking invite flow
+  8.  Error codes & rate limiting
+  9.  GCP deployment notes
+  10. What the macOS Lumi client must implement to connect
+
+The server agent on GCP should implement this spec exactly. The macOS
+Lumi client will be updated to consume it.
+
+================================================================================
+1. SYSTEM OVERVIEW
+================================================================================
+
+Current state (macOS client, local only):
+  - Users sign up / sign in through AccountTab (SettingsView.swift)
+  - Conversations are between the local user and local AI agents
+  - All data stored in UserDefaults (conversations) and GRDB/SQLite (agents)
+  - Token is a UUID stored in @AppStorage("account.token")
+
+Extended state (after this protocol):
+  - Users have a globally unique @handle (e.g. @alice)
+  - Conversations can include real remote users by linking their @handle
+  - All shared messages stored on the GCP server (SQLite3, WAL mode)
+  - Real-time delivery via WebSocket
+  - Local AI agent messages stay local; only user↔user messages go through server
+  - JWT replaces the UUID token for server auth
+
+Architecture:
+  ┌─────────────────────┐      HTTPS / WSS      ┌─────────────────────────┐
+  │  Lumi macOS Client  │ ◄──────────────────── │  GCP Server             │
+  │  (this repo)        │                       │  Python FastAPI         │
+  │                     │  REST: /api/v1/...    │  SQLite3 (WAL mode)     │
+  │  AccountTab signs   │  WS:   /ws            │  JWT auth               │
+  │  in/up → gets JWT   │                       │  Port 8080              │
+  └─────────────────────┘                       └─────────────────────────┘
+
+================================================================================
+2. USER & HANDLE SYSTEM
+================================================================================
+
+Every Lumi user has:
+  - id            UUID, primary key, immutable
+  - handle        @username, globally unique, 3-30 chars, [a-z0-9_], immutable
+                  after first 30 days
+  - display_name  Human-readable name (from "Full Name" field in sign-up)
+  - email         Used for sign-in, private
+  - password_hash bcrypt, cost factor 12
+  - avatar_url    Optional
+  - bio           Optional, max 160 chars
+
+Handle rules:
+  - Lowercase only (client normalises before sending)
+  - 3–30 characters
+  - Letters, digits, underscores only: ^[a-z0-9_]{3,30}$
+  - Cannot start or end with underscore
+  - Reserved handles: admin, lumi, system, bot, support, api, null, undefined
+
+Linking flow (how users join a chat):
+  1. User A opens AgentSpace → New Conversation or existing conversation
+  2. User A types @alice (another user's handle)
+  3. Client calls GET /api/v1/users/@alice to resolve the handle
+  4. If found: client calls POST /api/v1/invites with conversation_id + handle
+  5. Server creates a pending invite record, pushes WS event "invite" to @alice
+  6. @alice sees invite notification in her Lumi app
+  7. @alice calls POST /api/v1/invites/:id/accept
+  8. Server adds @alice to conversation_members
+  9. WS event "member_joined" pushed to all conversation members
+  10. Both users now exchange messages through the server in real time
+
+================================================================================
+3. SQLITE3 DATABASE SCHEMA  (complete DDL — run in order)
+================================================================================
+
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+PRAGMA synchronous = NORMAL;
+
+-- ── Users ──────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS users (
+    id              TEXT    PRIMARY KEY,          -- UUID v4
+    handle          TEXT    UNIQUE NOT NULL,      -- lowercase, no @
+    display_name    TEXT    NOT NULL,
+    email           TEXT    UNIQUE NOT NULL,
+    password_hash   TEXT    NOT NULL,             -- bcrypt
+    avatar_url      TEXT,
+    bio             TEXT,
+    created_at      INTEGER NOT NULL,             -- Unix epoch ms
+    updated_at      INTEGER NOT NULL,
+    last_seen_at    INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_handle ON users(handle);
+CREATE INDEX IF NOT EXISTS idx_users_email  ON users(email);
+
+-- ── Sessions (JWT tracking for revocation) ────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id                  TEXT    PRIMARY KEY,      -- UUID v4
+    user_id             TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_jti           TEXT    UNIQUE NOT NULL,  -- JWT "jti" claim (UUID)
+    refresh_token_hash  TEXT    NOT NULL,         -- SHA-256 hex of refresh token
+    device_name         TEXT,                     -- e.g. "Lumi macOS"
+    created_at          INTEGER NOT NULL,
+    expires_at          INTEGER NOT NULL,         -- access token expiry (ms)
+    refresh_expires_at  INTEGER NOT NULL,         -- refresh token expiry (ms)
+    last_used_at        INTEGER,
+    revoked             INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_jti     ON sessions(token_jti);
+
+-- ── Conversations ─────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id              TEXT    PRIMARY KEY,          -- UUID v4
+    title           TEXT,                         -- NULL for DMs
+    type            TEXT    NOT NULL DEFAULT 'dm', -- 'dm' | 'group'
+    created_by      TEXT    REFERENCES users(id) ON DELETE SET NULL,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    last_message_id TEXT                          -- denormalised for list view
+);
+
+-- ── Conversation Members ──────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS conversation_members (
+    conversation_id         TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    user_id                 TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role                    TEXT    NOT NULL DEFAULT 'member', -- 'owner'|'admin'|'member'
+    joined_at               INTEGER NOT NULL,
+    last_read_message_id    TEXT,                 -- for unread count
+    is_muted                INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (conversation_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conv_members_user ON conversation_members(user_id);
+
+-- ── Messages ──────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS messages (
+    id              TEXT    PRIMARY KEY,          -- UUID v4
+    conversation_id TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    sender_id       TEXT    NOT NULL REFERENCES users(id),
+    sender_handle   TEXT    NOT NULL,             -- denormalised, e.g. "alice"
+    content         TEXT    NOT NULL,
+    content_type    TEXT    NOT NULL DEFAULT 'text',
+                                                  -- 'text'|'image'|'file'|'agent_output'
+    metadata        TEXT,                         -- JSON blob (attachments, agent info)
+    reply_to_id     TEXT    REFERENCES messages(id) ON DELETE SET NULL,
+    client_id       TEXT,                         -- client-generated idempotency key
+    is_edited       INTEGER NOT NULL DEFAULT 0,
+    is_deleted      INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL,
+    edited_at       INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conv_time
+    ON messages(conversation_id, created_at DESC)
+    WHERE is_deleted = 0;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_id
+    ON messages(conversation_id, client_id)
+    WHERE client_id IS NOT NULL;
+
+-- ── Message Read Receipts ─────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS message_reads (
+    message_id  TEXT    NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    read_at     INTEGER NOT NULL,
+    PRIMARY KEY (message_id, user_id)
+);
+
+-- ── Invites ───────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS invites (
+    id              TEXT    PRIMARY KEY,          -- UUID v4
+    conversation_id TEXT    NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    inviter_id      TEXT    NOT NULL REFERENCES users(id),
+    invitee_handle  TEXT    NOT NULL,             -- the @handle that was typed
+    invitee_id      TEXT    REFERENCES users(id), -- resolved once accepted/declined
+    status          TEXT    NOT NULL DEFAULT 'pending',
+                                                  -- 'pending'|'accepted'|'declined'|'expired'
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER NOT NULL,             -- 7 days from created_at
+    responded_at    INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_invites_invitee  ON invites(invitee_handle, status);
+CREATE INDEX IF NOT EXISTS idx_invites_conv     ON invites(conversation_id);
+
+-- ── Presence ──────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS presence (
+    user_id         TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    status          TEXT    NOT NULL DEFAULT 'offline', -- 'online'|'away'|'offline'
+    last_ping_at    INTEGER
+);
+
+================================================================================
+4. REST API GATEWAY
+================================================================================
+
+Base URL:    https://<your-gcp-domain>/api/v1
+Auth header: Authorization: Bearer <access_token>   (on all protected routes)
+Content-Type: application/json
+
+All timestamps in responses are Unix epoch milliseconds (INTEGER).
+All IDs are UUID v4 strings.
+
+────────────────────────────────────────────────────────────────────────────────
+4.1  AUTHENTICATION
+────────────────────────────────────────────────────────────────────────────────
+
+POST /auth/signup
+  Register a new user. Creates user + session records.
+  Body:
+    {
+      "handle":       "alice",          // required, validated
+      "display_name": "Alice Smith",    // required
+      "email":        "alice@...",      // required
+      "password":     "...",            // required, min 8 chars
+      "device_name":  "Lumi macOS"      // optional
+    }
+  Response 201:
+    {
+      "user": {
+        "id":           "uuid",
+        "handle":       "alice",
+        "display_name": "Alice Smith",
+        "email":        "alice@...",
+        "created_at":   1234567890000
+      },
+      "access_token":   "<JWT>",        // expires in 24 hours
+      "refresh_token":  "<opaque>",     // expires in 30 days
+      "expires_at":     1234654290000
+    }
+  Errors: 400 VALIDATION_ERROR, 409 HANDLE_TAKEN, 409 EMAIL_TAKEN
+
+POST /auth/signin
+  Body:
+    {
+      "email":       "alice@...",
+      "password":    "...",
+      "device_name": "Lumi macOS"       // optional
+    }
+  Response 200: same shape as signup 201
+  Errors: 401 INVALID_CREDENTIALS, 429 RATE_LIMITED
+
+POST /auth/refresh
+  Exchange a refresh token for a new access token.
+  Body:
+    { "refresh_token": "..." }
+  Response 200:
+    {
+      "access_token":  "<JWT>",
+      "refresh_token": "<new opaque>",  // rotate on every use
+      "expires_at":    1234654290000
+    }
+  Errors: 401 TOKEN_INVALID, 401 TOKEN_EXPIRED
+
+POST /auth/signout                      // protected
+  Revokes the current session.
+  Body: {}
+  Response 204: (no content)
+
+GET /auth/me                            // protected
+  Response 200:
+    {
+      "id":           "uuid",
+      "handle":       "alice",
+      "display_name": "Alice Smith",
+      "email":        "alice@...",
+      "avatar_url":   null,
+      "bio":          null,
+      "created_at":   1234567890000,
+      "last_seen_at": 1234567890000
+    }
+
+────────────────────────────────────────────────────────────────────────────────
+4.2  USERS
+────────────────────────────────────────────────────────────────────────────────
+
+GET /users/@:handle                     // protected
+  Resolve a handle to a user profile. Used by the client before sending an
+  invite — client calls this as the user types "@alice".
+  Response 200:
+    {
+      "id":           "uuid",
+      "handle":       "alice",
+      "display_name": "Alice Smith",
+      "avatar_url":   null,
+      "bio":          null
+    }
+  Errors: 404 HANDLE_NOT_FOUND
+
+GET /users/search?q=:query&limit=10    // protected
+  Fuzzy search handles and display names. Returns max 20 results.
+  Response 200:
+    { "users": [ { same shape as above }, ... ] }
+
+PATCH /users/me                         // protected
+  Update own profile.
+  Body (all fields optional):
+    {
+      "display_name": "Alice S.",
+      "avatar_url":   "https://...",
+      "bio":          "Hello!"
+    }
+  Response 200: updated user object
+  Errors: 400 VALIDATION_ERROR
+
+────────────────────────────────────────────────────────────────────────────────
+4.3  CONVERSATIONS
+────────────────────────────────────────────────────────────────────────────────
+
+GET /conversations                      // protected
+  List all conversations the auth user is a member of, newest first.
+  Response 200:
+    {
+      "conversations": [
+        {
+          "id":           "uuid",
+          "title":        null,            // null for DMs
+          "type":         "dm",            // "dm" | "group"
+          "members":      [
+            { "id": "uuid", "handle": "alice", "display_name": "Alice", "role": "owner" },
+            { "id": "uuid", "handle": "bob",   "display_name": "Bob",   "role": "member" }
+          ],
+          "last_message": {                // null if no messages yet
+            "id":         "uuid",
+            "content":    "Hey!",
+            "sender_handle": "alice",
+            "created_at": 1234567890000
+          },
+          "unread_count": 3,
+          "created_at":   1234567890000,
+          "updated_at":   1234567890000
+        },
+        ...
+      ]
+    }
+
+POST /conversations                     // protected
+  Create a DM or group conversation.
+  Body:
+    {
+      "type":    "dm",                   // "dm" | "group"
+      "handles": ["bob"],                // @handles to add (resolve server-side)
+      "title":   null                    // required if type="group"
+    }
+  Notes:
+    - For DM: if a DM already exists between these two users, returns existing
+      (200 with existing conversation) rather than creating duplicate.
+    - For DM: exactly 1 handle required.
+    - For group: 1+ handles required, title required.
+  Response 201 (or 200 if DM already exists): conversation object (same shape as list item)
+  Errors: 400 VALIDATION_ERROR, 404 HANDLE_NOT_FOUND
+
+GET /conversations/:id                  // protected, must be member
+  Response 200: full conversation object
+
+PATCH /conversations/:id                // protected, must be owner/admin
+  Body: { "title": "New title" }
+  Response 200: updated conversation object
+  Errors: 403 FORBIDDEN, 404 CONVERSATION_NOT_FOUND
+
+DELETE /conversations/:id               // protected, must be member
+  Leaves the conversation (does not delete for others).
+  If the last member leaves a DM, conversation is hard-deleted.
+  Response 204
+
+────────────────────────────────────────────────────────────────────────────────
+4.4  MEMBERS
+────────────────────────────────────────────────────────────────────────────────
+
+POST /conversations/:id/members         // protected, must be owner/admin
+  Add a member by handle (also creates an accepted invite record).
+  Body: { "handle": "charlie" }
+  Response 201:
+    { "member": { "id": "uuid", "handle": "charlie", "display_name": "Charlie", "role": "member", "joined_at": ... } }
+  Errors: 404 HANDLE_NOT_FOUND, 409 ALREADY_A_MEMBER
+
+DELETE /conversations/:id/members/:userId  // protected
+  Remove a member. Only owner/admin can remove others; anyone can remove self.
+  Response 204
+  Errors: 403 FORBIDDEN, 404 NOT_A_MEMBER
+
+────────────────────────────────────────────────────────────────────────────────
+4.5  MESSAGES
+────────────────────────────────────────────────────────────────────────────────
+
+GET /conversations/:id/messages         // protected, must be member
+  Paginated message history, newest first.
+  Query params:
+    before=<message_id>   cursor (exclusive) — for pagination
+    limit=50              max 100
+  Response 200:
+    {
+      "messages": [
+        {
+          "id":             "uuid",
+          "conversation_id":"uuid",
+          "sender_id":      "uuid",
+          "sender_handle":  "alice",
+          "sender_name":    "Alice Smith",
+          "content":        "Hey Bob!",
+          "content_type":   "text",
+          "metadata":       null,
+          "reply_to_id":    null,
+          "is_edited":      false,
+          "is_deleted":     false,
+          "created_at":     1234567890000,
+          "read_by":        ["uuid-bob"]  // user ids who have read
+        },
+        ...
+      ],
+      "has_more": true,
+      "next_cursor": "uuid-of-oldest-message-in-this-page"
+    }
+
+POST /conversations/:id/messages        // protected, must be member
+  Send a message.
+  Body:
+    {
+      "content":      "Hey Bob!",
+      "content_type": "text",            // optional, default "text"
+      "metadata":     null,              // optional JSON object
+      "reply_to_id":  null,              // optional message UUID
+      "client_id":    "client-uuid"      // optional idempotency key
+    }
+  Response 201: message object (same shape as list item)
+  Errors: 400 VALIDATION_ERROR, 403 NOT_A_MEMBER, 404 CONVERSATION_NOT_FOUND
+
+PATCH /conversations/:id/messages/:msgId  // protected, must be sender
+  Edit message content.
+  Body: { "content": "Updated text" }
+  Response 200: updated message object
+  Errors: 403 FORBIDDEN, 404 MESSAGE_NOT_FOUND
+
+DELETE /conversations/:id/messages/:msgId  // protected, must be sender or admin
+  Soft-delete: sets is_deleted=1, content="[deleted]"
+  Response 204
+
+POST /conversations/:id/messages/:msgId/read  // protected, must be member
+  Mark all messages up to and including msgId as read for the auth user.
+  Updates conversation_members.last_read_message_id.
+  Response 204
+
+────────────────────────────────────────────────────────────────────────────────
+4.6  INVITES
+────────────────────────────────────────────────────────────────────────────────
+
+POST /invites                           // protected
+  Invite a user to a conversation by handle. Creates a pending invite.
+  The invitee does NOT need to be registered yet — invite is stored by handle
+  and claimed when they sign up or when they next call GET /invites.
+  Body:
+    {
+      "conversation_id": "uuid",
+      "invitee_handle":  "charlie"       // without @
+    }
+  Response 201:
+    {
+      "id":              "uuid",
+      "conversation_id": "uuid",
+      "invitee_handle":  "charlie",
+      "status":          "pending",
+      "expires_at":      1235172690000,  // 7 days from now
+      "created_at":      1234567890000
+    }
+  Errors: 400 VALIDATION_ERROR, 403 NOT_A_MEMBER, 404 CONVERSATION_NOT_FOUND,
+          409 INVITE_ALREADY_PENDING
+
+GET /invites                            // protected
+  List pending invites sent TO the auth user.
+  Response 200:
+    {
+      "invites": [
+        {
+          "id":              "uuid",
+          "conversation_id": "uuid",
+          "conversation_title": "Group chat" or null,
+          "inviter": { "handle": "alice", "display_name": "Alice" },
+          "status":          "pending",
+          "expires_at":      1235172690000,
+          "created_at":      1234567890000
+        },
+        ...
+      ]
+    }
+
+POST /invites/:id/accept                // protected
+  Accept a pending invite. Adds user to conversation_members.
+  Response 200:
+    { "conversation": { ...full conversation object... } }
+  Errors: 404 INVITE_NOT_FOUND, 409 INVITE_ALREADY_RESPONDED, 410 INVITE_EXPIRED
+
+POST /invites/:id/decline               // protected
+  Decline a pending invite.
+  Response 204
+  Errors: 404 INVITE_NOT_FOUND, 409 INVITE_ALREADY_RESPONDED
+
+================================================================================
+5. WEBSOCKET PROTOCOL
+================================================================================
+
+Endpoint:  wss://<your-gcp-domain>/ws
+
+Connection:
+  Query param auth:  wss://domain/ws?token=<access_token>
+  OR header:         Authorization: Bearer <access_token>
+  On connect, server validates JWT. If invalid → close(4001, "Unauthorized").
+
+Keep-alive:
+  Client sends { "type": "ping" } every 30 seconds.
+  Server replies { "type": "pong", "ts": <epoch_ms> }.
+  If no ping received in 60 seconds, server closes connection.
+
+Message format: JSON, newline-delimited.
+
+────────────────────────────────────────────────────────────────────────────────
+5.1  CLIENT → SERVER EVENTS
+────────────────────────────────────────────────────────────────────────────────
+
+PING
+  { "type": "ping" }
+
+SUBSCRIBE  — start receiving real-time events for a conversation
+  {
+    "type":            "subscribe",
+    "conversation_id": "uuid"
+  }
+  Server replies with SUBSCRIBED or error if not a member.
+
+UNSUBSCRIBE
+  {
+    "type":            "unsubscribe",
+    "conversation_id": "uuid"
+  }
+
+SEND MESSAGE
+  {
+    "type":            "message",
+    "conversation_id": "uuid",
+    "content":         "Hello!",
+    "content_type":    "text",           // optional
+    "reply_to_id":     null,             // optional
+    "client_id":       "client-uuid",    // idempotency key
+    "metadata":        null              // optional
+  }
+  Server persists and broadcasts MESSAGE event to all subscribers.
+  Replies with MESSAGE event back to sender (for confirmation / server-assigned ID).
+
+TYPING
+  {
+    "type":            "typing",
+    "conversation_id": "uuid",
+    "is_typing":       true
+  }
+  Server fan-outs TYPING event to other members. Not persisted.
+
+READ
+  {
+    "type":            "read",
+    "conversation_id": "uuid",
+    "message_id":      "uuid"            // mark read up to this message
+  }
+  Server updates last_read_message_id, fan-outs READ_RECEIPT event.
+
+────────────────────────────────────────────────────────────────────────────────
+5.2  SERVER → CLIENT EVENTS
+────────────────────────────────────────────────────────────────────────────────
+
+PONG
+  { "type": "pong", "ts": 1234567890000 }
+
+SUBSCRIBED
+  {
+    "type":            "subscribed",
+    "conversation_id": "uuid"
+  }
+
+MESSAGE  — new message in a subscribed conversation
+  {
+    "type": "message",
+    "message": {
+      "id":             "uuid",
+      "conversation_id":"uuid",
+      "sender_id":      "uuid",
+      "sender_handle":  "alice",
+      "sender_name":    "Alice Smith",
+      "content":        "Hello!",
+      "content_type":   "text",
+      "metadata":       null,
+      "reply_to_id":    null,
+      "client_id":      "client-uuid",
+      "is_edited":      false,
+      "is_deleted":     false,
+      "created_at":     1234567890000
+    }
+  }
+
+MESSAGE_EDITED
+  {
+    "type":       "message_edited",
+    "message_id": "uuid",
+    "conversation_id": "uuid",
+    "content":    "Updated text",
+    "edited_at":  1234567890000
+  }
+
+MESSAGE_DELETED
+  {
+    "type":            "message_deleted",
+    "message_id":      "uuid",
+    "conversation_id": "uuid"
+  }
+
+TYPING
+  {
+    "type":            "typing",
+    "conversation_id": "uuid",
+    "user": { "id": "uuid", "handle": "alice", "display_name": "Alice" },
+    "is_typing":       true
+  }
+
+READ_RECEIPT
+  {
+    "type":            "read_receipt",
+    "conversation_id": "uuid",
+    "user_id":         "uuid",
+    "message_id":      "uuid",           // read up to this message
+    "read_at":         1234567890000
+  }
+
+MEMBER_JOINED
+  {
+    "type":            "member_joined",
+    "conversation_id": "uuid",
+    "member": { "id": "uuid", "handle": "alice", "display_name": "Alice", "role": "member", "joined_at": ... }
+  }
+
+MEMBER_LEFT
+  {
+    "type":            "member_left",
+    "conversation_id": "uuid",
+    "user_id":         "uuid",
+    "handle":          "alice"
+  }
+
+INVITE  — sent to a user when they receive a new invite
+  {
+    "type": "invite",
+    "invite": {
+      "id":                 "uuid",
+      "conversation_id":    "uuid",
+      "conversation_title": null,
+      "inviter": { "handle": "alice", "display_name": "Alice" },
+      "expires_at":         1235172690000,
+      "created_at":         1234567890000
+    }
+  }
+
+PRESENCE  — broadcast when a user comes online or goes offline
+  {
+    "type":    "presence",
+    "user_id": "uuid",
+    "handle":  "alice",
+    "status":  "online"               // "online" | "away" | "offline"
+  }
+
+ERROR
+  {
+    "type":    "error",
+    "code":    "NOT_A_MEMBER",
+    "message": "You are not a member of this conversation"
+  }
+
+================================================================================
+6. JWT STRUCTURE
+================================================================================
+
+Algorithm: HS256 (shared secret stored as GCP Secret Manager env var JWT_SECRET)
+
+Access token payload:
+  {
+    "sub":    "user-uuid",            // user.id
+    "handle": "alice",                // user.handle (no @)
+    "jti":    "session-uuid",         // sessions.id (for revocation)
+    "iat":    1234567890,             // issued at (seconds)
+    "exp":    1234654290,             // expires at (iat + 86400 = 24 hours)
+    "type":   "access"
+  }
+
+Refresh token:
+  Opaque 64-byte random hex string (not a JWT).
+  Stored as SHA-256 hash in sessions.refresh_token_hash.
+  Expires in 30 days.
+  Rotated on every use (old token revoked, new issued).
+
+Revocation check:
+  On every protected request, server looks up sessions WHERE token_jti = jti
+  AND revoked = 0. If not found or revoked, return 401 TOKEN_REVOKED.
+
+================================================================================
+7. ERROR CODES & HTTP STATUS REFERENCE
+================================================================================
+
+All errors follow:
+  {
+    "error": {
+      "code":    "HANDLE_NOT_FOUND",
+      "message": "No user found with handle @alice",
+      "status":  404
+    }
+  }
+
+Code                      HTTP   Description
+────────────────────────  ─────  ────────────────────────────────────────
+VALIDATION_ERROR          400    Request body failed validation
+UNAUTHORIZED              401    No token or invalid token
+TOKEN_EXPIRED             401    Access token has expired
+TOKEN_REVOKED             401    Token has been revoked (signed out)
+FORBIDDEN                 403    Authenticated but not allowed
+HANDLE_NOT_FOUND          404    @handle does not exist
+CONVERSATION_NOT_FOUND    404    Conversation UUID does not exist
+MESSAGE_NOT_FOUND         404    Message UUID does not exist
+INVITE_NOT_FOUND          404    Invite UUID does not exist
+NOT_A_MEMBER              403    User is not a member of the conversation
+HANDLE_TAKEN              409    @handle already registered
+EMAIL_TAKEN               409    Email already registered
+ALREADY_A_MEMBER          409    User is already in the conversation
+INVITE_ALREADY_PENDING    409    An active invite for this handle already exists
+INVITE_ALREADY_RESPONDED  409    Invite was already accepted or declined
+INVITE_EXPIRED            410    Invite passed its 7-day window
+INVALID_CREDENTIALS       401    Wrong email or password
+RATE_LIMITED              429    Too many requests (see Retry-After header)
+
+================================================================================
+8. RATE LIMITING
+================================================================================
+
+Apply per IP + per user_id:
+  POST /auth/signin         5  req / min   per IP
+  POST /auth/signup         3  req / min   per IP
+  POST /auth/refresh        10 req / min   per user
+  POST .../messages         60 req / min   per user
+  GET  .../messages         120 req / min  per user
+  * all other endpoints     30 req / min   per user
+
+On limit exceeded: 429 with header Retry-After: <seconds>.
+
+================================================================================
+9. GCP DEPLOYMENT NOTES
+================================================================================
+
+Recommended stack:
+  Runtime:    Python 3.12
+  Framework:  FastAPI + Uvicorn (async WebSocket support built-in)
+  Database:   SQLite3 (WAL mode) — single file, no extra infra
+  Auth:       PyJWT (pip install pyjwt[crypto] bcrypt)
+  WS:         FastAPI native WebSocket (no extra lib needed)
+  Hosting:    GCP Cloud Run (scale to zero) or GCP Compute Engine e2-micro
+
+Environment variables (store in GCP Secret Manager):
+  JWT_SECRET          Random 64-char hex string
+  DB_PATH             /data/lumi.db   (mount a persistent disk)
+  ALLOWED_ORIGINS     https://lumiagent.app,http://localhost:*
+
+File structure on GCP server:
+  server/
+    main.py             FastAPI app entry point
+    auth.py             JWT helpers, bcrypt, /auth/* routes
+    users.py            /users/* routes
+    conversations.py    /conversations/* + /members/* routes
+    messages.py         /messages/* routes
+    invites.py          /invites/* routes
+    websocket.py        /ws handler + connection manager
+    database.py         SQLite3 connection, DDL runner, helpers
+    models.py           Pydantic request/response models
+    config.py           Env var loading
+    requirements.txt
+
+requirements.txt:
+  fastapi==0.111.0
+  uvicorn[standard]==0.30.1
+  pyjwt[crypto]==2.8.0
+  bcrypt==4.1.3
+  python-dotenv==1.0.1
+
+Start command:
+  uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1
+
+Cloud Run Dockerfile (minimal):
+  FROM python:3.12-slim
+  WORKDIR /app
+  COPY requirements.txt .
+  RUN pip install --no-cache-dir -r requirements.txt
+  COPY . .
+  RUN mkdir -p /data
+  EXPOSE 8080
+  CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+
+Persistent disk (SQLite file must survive restarts):
+  Mount a GCP Persistent Disk or Filestore at /data
+  Set DB_PATH=/data/lumi.db
+
+CORS:
+  Allow origins from ALLOWED_ORIGINS env var
+  Allow methods: GET, POST, PATCH, DELETE, OPTIONS
+  Allow headers: Authorization, Content-Type
+  Allow credentials: true
+
+Health check endpoint (for Cloud Run):
+  GET /health → 200 { "status": "ok", "db": "ok" }
+
+================================================================================
+10. WHAT THE LUMI macOS CLIENT MUST IMPLEMENT
+================================================================================
+
+(Implement these in the Swift client to connect to this server)
+
+A. AccountTab changes
+   - Add "Handle" TextField to sign-up form (validated: ^[a-z0-9_]{3,30}$)
+   - Replace UUID token with real JWT from server response
+   - Store access_token, refresh_token, expires_at in Keychain (not UserDefaults)
+   - Auto-refresh token when expires_at is within 5 minutes
+   - On sign-out: call POST /auth/signout before clearing token
+
+B. NetworkClient class (new file: Infrastructure/Network/LumiServerClient.swift)
+   - Base URL from @AppStorage("settings.serverURL") defaulting to GCP URL
+   - Attach Authorization: Bearer <token> to every request
+   - Handle 401 → auto-refresh → retry once → else sign out
+
+C. WebSocket manager (new file: Infrastructure/Network/LumiWebSocket.swift)
+   - Connect on app launch when signed in
+   - Subscribe to all conversations on connect
+   - Map incoming MESSAGE events → append SpaceMessage to conversation
+   - Map incoming INVITE events → show notification badge
+   - Reconnect with exponential backoff on disconnect
+
+D. Handle resolution in AgentSpace
+   - When user types @word in new conversation / add member sheet:
+     debounce 400ms → GET /users/@{word} → show resolved user card
+   - "Invite @handle" button → POST /invites
+
+E. Invites UI
+   - Badge on sidebar or notification dot when GET /invites returns pending items
+   - Sheet showing pending invites with Accept / Decline buttons
+
+F. Settings
+   - Add "Server URL" field in APIKeysTab (default to GCP domain)
+   - Show connected/disconnected WS status indicator
+
+================================================================================
+END OF SPECIFICATION
+================================================================================
+Generated: 2026-02-20
+Version:   1.0.0
+For:       GCP server agent (Claude Code)
+From:      Lumi macOS client codebase at /Users/osmond/Lumi
+================================================================================

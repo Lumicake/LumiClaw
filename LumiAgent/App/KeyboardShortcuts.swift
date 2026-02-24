@@ -7,6 +7,7 @@
 //  Keyboard shortcuts and commands
 //
 
+#if os(macOS)
 import SwiftUI
 
 // MARK: - App Commands
@@ -22,6 +23,11 @@ struct LumiAgentCommands: Commands {
                 appState.toggleCommandPalette()
             }
             .keyboardShortcut("l", modifiers: [.option, .command])
+
+            Button("Quick Actions") {
+                appState.toggleQuickActionPanel()
+            }
+            .keyboardShortcut("l", modifiers: .control)
         }
 
         // View Menu
@@ -118,3 +124,4 @@ struct LumiAgentCommands: Commands {
         }
     }
 }
+#endif

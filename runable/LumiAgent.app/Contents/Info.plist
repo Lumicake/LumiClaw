@@ -20,5 +20,9 @@
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSHealthShareUsageDescription</key>
+    <string>Lumi reads your Apple Health data to display metrics and provide AI-powered wellness insights.</string>
+    <key>NSHealthUpdateUsageDescription</key>
+    <string>Lumi does not write any data to Apple Health.</string>
 </dict>
 </plist>

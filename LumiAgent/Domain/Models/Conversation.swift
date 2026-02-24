@@ -51,6 +51,8 @@ struct SpaceMessage: Identifiable, Codable, Equatable {
     let agentId: UUID?
     let timestamp: Date
     var isStreaming: Bool
+    /// Optional JPEG image data attached to this message (e.g. screenshot for vision).
+    let imageData: Data?
 
     enum SpaceMessageRole: String, Codable {
         case user
@@ -63,7 +65,8 @@ struct SpaceMessage: Identifiable, Codable, Equatable {
         content: String,
         agentId: UUID? = nil,
         timestamp: Date = Date(),
-        isStreaming: Bool = false
+        isStreaming: Bool = false,
+        imageData: Data? = nil
     ) {
         self.id = id
         self.role = role
@@ -71,5 +74,6 @@ struct SpaceMessage: Identifiable, Codable, Equatable {
         self.agentId = agentId
         self.timestamp = timestamp
         self.isStreaming = isStreaming
+        self.imageData = imageData
     }
 }

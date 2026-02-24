@@ -1,35 +1,47 @@
 #!/bin/bash
-# Launch Lumi Agent with proper bundle identifier
+# run_app.sh — build, sign, and launch LumiAgent.app
+# For day-to-day use, prefer auto_update.sh (also kills the running instance first).
 
-set -e  # Exit on error
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_BUNDLE="$SCRIPT_DIR/runable/LumiAgent.app"
+BINARY_DST="$APP_BUNDLE/Contents/MacOS/LumiAgent"
+ENTITLEMENTS="$SCRIPT_DIR/LumiAgent.entitlements"
 
 echo "🚀 Lumi Agent Launcher"
 echo "====================="
-echo ""
 
-# Set bundle identifier in environment
-export PRODUCT_BUNDLE_IDENTIFIER="com.lumiagent.app"
-export PRODUCT_NAME="LumiAgent"
-export CFBundleIdentifier="com.lumiagent.app"
-
-echo "📦 Bundle ID: $PRODUCT_BUNDLE_IDENTIFIER"
-echo ""
-
+# ── 1. Build ──────────────────────────────────────────────────────────────────
 echo "🔨 Building..."
-swift build -c debug
+swift build -c debug --package-path "$SCRIPT_DIR"
+echo "✅ Build complete"
 
-if [ $? -eq 0 ]; then
-    echo "✅ Build successful!"
-    echo ""
-    echo "🎨 Launching Lumi Agent..."
-    echo "   (Press Ctrl+C to stop)"
-    echo ""
+# ── 2. Copy binary into .app bundle ──────────────────────────────────────────
+echo "📦 Assembling .app bundle..."
+cp "$SCRIPT_DIR/.build/debug/LumiAgent" "$BINARY_DST"
 
-    # Launch with bundle ID set
-    PRODUCT_BUNDLE_IDENTIFIER="com.lumiagent.app" \
-    CFBundleIdentifier="com.lumiagent.app" \
-    .build/debug/LumiAgent
+# ── 3. Sign ───────────────────────────────────────────────────────────────────
+echo "🔐 Signing..."
+xattr -dr com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || true
+
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -f "$APP_BUNDLE" 2>/dev/null || true
+
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+           | grep -o '"Apple Development[^"]*"' | head -1 | tr -d '"')
+
+if [ -n "$IDENTITY" ]; then
+    codesign --force --deep --sign "$IDENTITY" \
+             --entitlements "$ENTITLEMENTS" \
+             "$APP_BUNDLE"
+    echo "✅ Signed with Developer cert"
 else
-    echo "❌ Build failed"
-    exit 1
+    codesign --force --deep --sign - \
+             --entitlements "$ENTITLEMENTS" \
+             "$APP_BUNDLE"
+    echo "✅ Signed (ad-hoc)"
 fi
+
+echo "🚀 Launching..."
+open -n "$APP_BUNDLE" 2>/dev/null || nohup "$BINARY_DST" </dev/null &>/dev/null &
