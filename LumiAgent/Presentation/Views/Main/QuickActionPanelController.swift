@@ -106,7 +106,7 @@ final class QuickActionPanelController: NSObject {
             defer: false
         )
         p.contentView = hosting
-        p.level = NSWindow.Level(Int(CGShieldingWindowLevel()))
+        p.level = .floating
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = false

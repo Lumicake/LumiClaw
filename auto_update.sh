@@ -84,10 +84,22 @@ if [ -n "$IDENTITY" ]; then
              --entitlements "$ENTITLEMENTS" \
              "$APP_BUNDLE"
 else
-    echo "   No Developer cert found — ad-hoc signing"
-    echo "   (Add your Apple ID in Xcode → Settings → Accounts for full HealthKit access)"
+    echo "   No Developer cert found — ad-hoc signing (no HealthKit)"
+    # HealthKit entitlements require a real Developer cert.
+    # Sign with only get-task-allow for ad-hoc builds.
+    ADHOC_ENT="$SCRIPT_DIR/.build/adhoc.entitlements"
+    cat > "$ADHOC_ENT" << 'ENTPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+</dict>
+</plist>
+ENTPLIST
     codesign --force --deep --sign - \
-             --entitlements "$ENTITLEMENTS" \
+             --entitlements "$ADHOC_ENT" \
              "$APP_BUNDLE"
 fi
 

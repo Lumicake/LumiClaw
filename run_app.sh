@@ -37,10 +37,21 @@ if [ -n "$IDENTITY" ]; then
              "$APP_BUNDLE"
     echo "✅ Signed with Developer cert"
 else
+    ADHOC_ENT="$SCRIPT_DIR/.build/adhoc.entitlements"
+    cat > "$ADHOC_ENT" << 'ENTPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+</dict>
+</plist>
+ENTPLIST
     codesign --force --deep --sign - \
-             --entitlements "$ENTITLEMENTS" \
+             --entitlements "$ADHOC_ENT" \
              "$APP_BUNDLE"
-    echo "✅ Signed (ad-hoc)"
+    echo "✅ Signed (ad-hoc, no HealthKit)"
 fi
 
 echo "🚀 Launching..."
