@@ -409,6 +409,9 @@ struct QuickActionButton: View {
 struct AgentReplyBubbleView: View {
     @ObservedObject var model: AgentReplyBubbleModel
     let controller: AgentReplyBubbleController?
+    @StateObject private var voiceManager = OpenAIVoiceManager()
+    @State private var vocalModeEnabled = false
+    @State private var lastSpokenText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -465,6 +468,29 @@ struct AgentReplyBubbleView: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { sendUserInput() }
 
+                Button {
+                    vocalModeEnabled.toggle()
+                } label: {
+                    Image(systemName: vocalModeEnabled ? "waveform.circle.fill" : "waveform.circle")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(vocalModeEnabled ? Color.pink : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Toggle vocal mode (auto-speak replies).")
+
+                Button(action: handleVoiceTap) {
+                    Image(systemName: "mic.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(
+                            voiceManager.isRecording
+                                ? Color.red
+                                : (voiceManager.isProcessing ? Color.orange : Color.accentColor)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(voiceManager.isProcessing || voiceManager.isRecording)
+                .help(voiceManager.isRecording ? "Listening... auto-stop + auto-send." : "Start voice input (auto-stop + auto-send).")
+
                 Button(action: { sendUserInput() }) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 20))
@@ -472,6 +498,18 @@ struct AgentReplyBubbleView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(model.userInput.isEmpty)
+            }
+
+            if voiceManager.isRecording || voiceManager.isProcessing || (voiceManager.lastError?.isEmpty == false) {
+                HStack(spacing: 6) {
+                    Image(systemName: voiceManager.isRecording ? "waveform" : (voiceManager.isProcessing ? "hourglass" : "exclamationmark.triangle.fill"))
+                        .font(.caption)
+                        .foregroundStyle(voiceManager.isRecording ? .red : .orange)
+                    Text(voiceStatusText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
             }
         }
         .padding(12)
@@ -484,12 +522,40 @@ struct AgentReplyBubbleView: View {
                         .stroke(Color.white.opacity(0.2), lineWidth: 1)
                 )
         )
+        .onChange(of: model.text) {
+            guard vocalModeEnabled else { return }
+            let content = model.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !content.isEmpty else { return }
+            guard content != "Processing..." else { return }
+            guard content != lastSpokenText else { return }
+            lastSpokenText = content
+            Task {
+                try? await voiceManager.speak(text: content)
+            }
+        }
     }
 
     private func sendUserInput() {
         guard let convId = model.conversationId, !model.userInput.isEmpty else { return }
         controller?.onSend?(model.userInput, convId)
         model.userInput = ""
+    }
+
+    private func handleVoiceTap() {
+        Task {
+            guard !voiceManager.isRecording, !voiceManager.isProcessing else { return }
+            if let transcript = try? await voiceManager.recordAndTranscribeAutomatically(),
+               !transcript.isEmpty {
+                model.userInput = transcript
+                sendUserInput()
+            }
+        }
+    }
+
+    private var voiceStatusText: String {
+        if voiceManager.isRecording { return "Listening... auto-stop enabled." }
+        if voiceManager.isProcessing { return "Processing voice..." }
+        return voiceManager.lastError ?? ""
     }
 }
 #endif

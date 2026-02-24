@@ -16,6 +16,9 @@ struct ChatView: View {
     @State private var inputText = ""
     @State private var agentModeActive = false
     @State private var desktopControlEnabled = false
+    @State private var voiceModeEnabled = false
+    @State private var lastSpokenMessageId: UUID?
+    @StateObject private var voiceManager = OpenAIVoiceManager()
 
     var conversation: Conversation? {
         appState.conversations.first { $0.id == conversationId }
@@ -37,12 +40,20 @@ struct ChatView: View {
                     MessageInputView(
                         text: $inputText,
                         agents: participants,
+                        voiceModeEnabled: $voiceModeEnabled,
+                        isRecordingVoice: voiceManager.isRecording,
+                        isProcessingVoice: voiceManager.isProcessing,
+                        voiceError: voiceManager.lastError,
+                        onVoiceAction: handleVoiceAction,
                         onSend: sendMessage
                     )
                 }
                 .onAppear { loadSettings(for: conv) }
                 .onChange(of: agentModeActive) { saveSettings(for: conv) }
                 .onChange(of: desktopControlEnabled) { saveSettings(for: conv) }
+                .onChange(of: conv.messages.count) {
+                    handleVoicePlayback(for: conv)
+                }
             } else {
                 EmptyDetailView(message: "Conversation not found")
             }
@@ -189,6 +200,40 @@ struct ChatView: View {
         let desktopControlKey = "desktopControl_\(conv.id)"
         UserDefaults.standard.set(agentModeActive, forKey: agentModeKey)
         UserDefaults.standard.set(desktopControlEnabled, forKey: desktopControlKey)
+    }
+
+    private func handleVoiceAction() {
+        Task {
+            guard !voiceManager.isRecording, !voiceManager.isProcessing else { return }
+            do {
+                let transcript = try await voiceManager.recordAndTranscribeAutomatically()
+                guard !transcript.isEmpty else { return }
+                inputText = transcript
+                sendMessage()
+            } catch {
+                voiceManager.lastError = error.localizedDescription
+            }
+        }
+    }
+
+    private func handleVoicePlayback(for conv: Conversation) {
+        guard voiceModeEnabled else { return }
+        guard let message = conv.messages.last else { return }
+        guard message.role == .agent else { return }
+        guard !message.isStreaming else { return }
+        guard message.id != lastSpokenMessageId else { return }
+
+        let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { return }
+
+        lastSpokenMessageId = message.id
+        Task {
+            do {
+                try await voiceManager.speak(text: content)
+            } catch {
+                voiceManager.lastError = error.localizedDescription
+            }
+        }
     }
 }
 
@@ -494,6 +539,11 @@ struct TypingIndicator: View {
 struct MessageInputView: View {
     @Binding var text: String
     let agents: [Agent]
+    @Binding var voiceModeEnabled: Bool
+    let isRecordingVoice: Bool
+    let isProcessingVoice: Bool
+    let voiceError: String?
+    let onVoiceAction: () -> Void
     let onSend: () -> Void
 
     @State private var mentionQuery: String? = nil
@@ -569,6 +619,35 @@ struct MessageInputView: View {
                         return .handled
                     }
 
+                Button {
+                    voiceModeEnabled.toggle()
+                } label: {
+                    Image(systemName: voiceModeEnabled ? "waveform.circle.fill" : "waveform.circle")
+                        .font(.system(size: 23, weight: .semibold))
+                        .foregroundStyle(voiceModeEnabled ? Color.pink : Color.secondary.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .help("Toggle vocal mode. When enabled, agent replies are spoken with OpenAI TTS.")
+                .padding(.bottom, 6)
+
+                Button(action: onVoiceAction) {
+                    Image(systemName: isRecordingVoice ? "stop.circle.fill" : "mic.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(
+                            isRecordingVoice
+                                ? Color.red
+                                : (isProcessingVoice ? Color.orange : Color.accentColor)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(isProcessingVoice)
+                .help(
+                    isRecordingVoice
+                        ? "Listening... voice will auto-stop and send."
+                        : "Start voice input (auto-stop + auto-send)."
+                )
+                .padding(.bottom, 4)
+
                 Button(action: performSend) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 28))
@@ -580,8 +659,30 @@ struct MessageInputView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
+
+            if isRecordingVoice || isProcessingVoice || (voiceError?.isEmpty == false) {
+                HStack(spacing: 6) {
+                    Image(systemName: isRecordingVoice ? "waveform" : (isProcessingVoice ? "hourglass" : "exclamationmark.triangle.fill"))
+                        .foregroundStyle(isRecordingVoice ? .red : (isProcessingVoice ? .orange : .orange))
+                        .font(.caption)
+
+                    Text(voiceStatusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+            }
         }
         .background(.bar)
+    }
+
+    private var voiceStatusText: String {
+        if isRecordingVoice { return "Listening... auto-stop and send enabled." }
+        if isProcessingVoice { return "Transcribing with Whisper..." }
+        return voiceError ?? ""
     }
 
     private func performSend() {
