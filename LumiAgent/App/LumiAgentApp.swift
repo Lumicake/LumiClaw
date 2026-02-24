@@ -551,7 +551,7 @@ class AppState: ObservableObject {
 
     // MARK: - Messaging
 
-    func sendMessage(_ text: String, in conversationId: UUID, agentMode: Bool = false) {
+    func sendMessage(_ text: String, in conversationId: UUID, agentMode: Bool = false, desktopControlEnabled: Bool = false) {
         guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
 
         let userMsg = SpaceMessage(role: .user, content: text)
@@ -578,13 +578,13 @@ class AppState: ObservableObject {
                     .first(where: { $0.id == conversationId })?
                     .messages.filter { !$0.isStreaming } ?? []
                 await streamResponse(from: agent, in: conversationId,
-                                     history: freshHistory, agentMode: agentMode)
+                                     history: freshHistory, agentMode: agentMode, desktopControlEnabled: desktopControlEnabled)
             }
         }
         screenControlTasks.append(task)
     }
 
-    private func streamResponse(from agent: Agent, in conversationId: UUID, history: [SpaceMessage], agentMode: Bool = false, delegationDepth: Int = 0) async {
+    private func streamResponse(from agent: Agent, in conversationId: UUID, history: [SpaceMessage], agentMode: Bool = false, desktopControlEnabled: Bool = false, delegationDepth: Int = 0) async {
         guard let index = conversations.firstIndex(where: { $0.id == conversationId }) else { return }
 
         // Only raise the screen-control flag when a screen tool is actually called,
@@ -632,10 +632,16 @@ class AppState: ObservableObject {
         // can complete multi-step tasks (search → reason → write, etc.) without
         // the user having to pre-enable individual tools.
         // Outside Agent Mode, respect the agent's explicit enabledTools list.
+        // If desktopControlEnabled is false, exclude desktop control tools (mouse, keyboard, open_app).
         var tools: [AITool]
         #if os(macOS)
         if agentMode {
-            tools = ToolRegistry.shared.getToolsForAI() // all tools, no filter
+            if desktopControlEnabled {
+                tools = ToolRegistry.shared.getToolsForAI() // all tools
+            } else {
+                // Allow screenshot and AppleScript but not mouse/keyboard/app control
+                tools = ToolRegistry.shared.getToolsForAIWithoutDesktopControl()
+            }
         } else {
             tools = ToolRegistry.shared.getToolsForAI(enabledNames: agent.configuration.enabledTools)
         }
@@ -651,8 +657,12 @@ class AppState: ObservableObject {
         let effectiveSystemPrompt: String? = {
             var parts: [String] = []
             if agentMode {
+                let modeDescription = desktopControlEnabled
+                    ? "You have FULL autonomous control of the user's Mac — file system, web, shell, apps, and screen."
+                    : "You have access to file system, web, shell, AppleScript, and screenshots. Desktop control (mouse, keyboard, app launching) is DISABLED."
+
                 parts.append("""
-                You are in Agent Mode. You have FULL autonomous control of the user's Mac — file system, web, shell, apps, and screen.
+                You are in Agent Mode. \(modeDescription)
 
                 ═══ MULTI-STEP TASK EXECUTION ═══
                 For any task that requires multiple steps (research → reason → write, open app → interact → verify, etc.):
@@ -732,6 +742,25 @@ class AppState: ObservableObject {
                 3. NEVER leave a task half-finished. If a step fails, try an alternative approach.
                 4. Desktop path: use execute_command("echo $HOME") to get the user's home, then write to $HOME/Desktop/.
                 """)
+
+                if !desktopControlEnabled {
+                    parts.append("""
+                    ⚠️ DESKTOP CONTROL RESTRICTION ⚠️
+                    The following tools are NOT available:
+                    • click_mouse, scroll_mouse, move_mouse — no mouse control
+                    • type_text, press_key — no keyboard input
+                    • open_application — cannot launch apps
+
+                    AVAILABLE ALTERNATIVES:
+                    • take_screenshot — view the screen
+                    • run_applescript — execute AppleScript for automation
+                    • execute_command — run shell commands
+                    • write_file, read_file — file operations
+                    • web_search, fetch_url — web access
+
+                    Use AppleScript (run_applescript) with System Events for sophisticated automation instead of mouse/keyboard clicks.
+                    """)
+                }
             }
             if isGroup {
                 let others = convParticipants.filter { $0.id != agent.id }

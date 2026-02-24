@@ -56,6 +56,24 @@ final class ToolRegistry {
             .map { $0.toAITool() }
     }
 
+    /// Get tools for AI excluding desktop control tools.
+    /// Allows screenshot and AppleScript but blocks mouse/keyboard/app control.
+    func getToolsForAIWithoutDesktopControl(enabledNames: [String] = []) -> [AITool] {
+        let desktopControlTools: Set<String> = [
+            "click_mouse", "scroll_mouse", "move_mouse",
+            "type_text", "press_key", "open_application"
+        ]
+        let all = tools.values
+            .filter { !desktopControlTools.contains($0.name) }
+
+        if enabledNames.isEmpty {
+            return all.map { $0.toAITool() }
+        }
+        return all
+            .filter { enabledNames.contains($0.name) }
+            .map { $0.toAITool() }
+    }
+
     // MARK: - Built-in Tools
 
     private func registerBuiltInTools() {

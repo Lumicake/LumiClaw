@@ -162,7 +162,7 @@ struct ChatView: View {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         inputText = ""
-        appState.sendMessage(text, in: conversationId, agentMode: agentModeActive)
+        appState.sendMessage(text, in: conversationId, agentMode: agentModeActive, desktopControlEnabled: desktopControlEnabled)
     }
 
     private func agentFor(_ message: SpaceMessage) -> Agent? {
