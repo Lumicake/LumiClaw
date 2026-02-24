@@ -15,6 +15,7 @@ struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @State private var inputText = ""
     @State private var agentModeActive = false
+    @State private var desktopControlEnabled = false
 
     var conversation: Conversation? {
         appState.conversations.first { $0.id == conversationId }
@@ -39,6 +40,9 @@ struct ChatView: View {
                         onSend: sendMessage
                     )
                 }
+                .onAppear { loadSettings(for: conv) }
+                .onChange(of: agentModeActive) { saveSettings(for: conv) }
+                .onChange(of: desktopControlEnabled) { saveSettings(for: conv) }
             } else {
                 EmptyDetailView(message: "Conversation not found")
             }
@@ -66,9 +70,15 @@ struct ChatView: View {
                 }
             }
             Spacer()
-            // Agent Mode — only available in DMs
+            // Agent Mode and Desktop Control — only available in DMs
             if !conv.isGroup {
-                AgentModeButton(isActive: $agentModeActive)
+                HStack(spacing: 8) {
+                    AgentModeButton(isActive: $agentModeActive)
+                    DesktopControlButton(
+                        isEnabled: $desktopControlEnabled,
+                        isAgentModeActive: agentModeActive
+                    )
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -166,6 +176,20 @@ struct ChatView: View {
             proxy.scrollTo(last.id, anchor: .bottom)
         }
     }
+
+    private func loadSettings(for conv: Conversation) {
+        let agentModeKey = "agentMode_\(conv.id)"
+        let desktopControlKey = "desktopControl_\(conv.id)"
+        agentModeActive = UserDefaults.standard.bool(forKey: agentModeKey)
+        desktopControlEnabled = UserDefaults.standard.bool(forKey: desktopControlKey)
+    }
+
+    private func saveSettings(for conv: Conversation) {
+        let agentModeKey = "agentMode_\(conv.id)"
+        let desktopControlKey = "desktopControl_\(conv.id)"
+        UserDefaults.standard.set(agentModeActive, forKey: agentModeKey)
+        UserDefaults.standard.set(desktopControlEnabled, forKey: desktopControlKey)
+    }
 }
 
 // MARK: - Agent Mode Button
@@ -209,6 +233,40 @@ struct AgentModeButton: View {
         .help(isActive ? "Agent Mode active — agent can control your screen. Click to disable." : "Enable Agent Mode to give the agent screen control.")
         .onAppear { isPulsing = isActive }
         .onChange(of: isActive) { isPulsing = isActive }
+    }
+}
+
+// MARK: - Desktop Control Button
+
+struct DesktopControlButton: View {
+    @Binding var isEnabled: Bool
+    let isAgentModeActive: Bool
+
+    var body: some View {
+        Button {
+            isEnabled.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("Desktop")
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+            .foregroundStyle(isEnabled ? .blue : .secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(isEnabled ? Color.blue.opacity(0.1) : Color.secondary.opacity(0.08))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isAgentModeActive)
+        .opacity(isAgentModeActive ? 1.0 : 0.5)
+        .help(
+            !isAgentModeActive
+                ? "Enable Agent Mode first to control desktop features."
+                : (isEnabled ? "Desktop Control active — agent can use system tools. Click to disable." : "Enable Desktop Control to allow agent system tool usage.")
+        )
     }
 }
 
