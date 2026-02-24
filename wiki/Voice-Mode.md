@@ -1,24 +1,50 @@
-# Voice Mode (Whisper + TTS)
+# Voice Mode (Realtime + Whisper + TTS)
 
-Voice mode is available in:
+## Where Voice Exists
 
-- Chat composer
-- Quick-action reply bubble
+- Chat composer (Agent Space)
+- Quick Action reply bubble
 
-## Input (Speech to Text)
+## Input Pipeline
 
-- One-tap mic flow
-- Uses OpenAI realtime transcription first (server-side VAD turn detection)
-- Auto-stop on detected end of speech
-- Auto-transcribe and auto-send
-- Fallback path uses local recording + transcription API
+One-tap voice capture path:
 
-## Output (Text to Speech)
+1. Request/check mic permission.
+2. Start realtime websocket session (`/v1/realtime?model=gpt-realtime`).
+3. Stream PCM chunks from `AVAudioEngine`.
+4. Use OpenAI server VAD turn detection (`turn_detection: server_vad`).
+5. On completed transcript event, auto-send message.
 
-- Uses OpenAI TTS model `gpt-4o-mini-tts`
-- Voice mode toggle enables auto-speaking agent replies
+Fallback path:
 
-## Requirements
+- Local recording + silence detection + transcription endpoint.
 
-- OpenAI key in `Settings -> API Keys`
-- Microphone permission enabled in macOS
+## Output Pipeline
+
+- Agent text can be spoken with OpenAI TTS (`gpt-4o-mini-tts`, `voice: alloy`).
+
+## State Indicators
+
+- `isRecording`: listening state
+- `isProcessing`: transcription/TTS in progress
+- `lastError`: human-readable failure path
+
+## Common Failure Causes
+
+- Missing OpenAI API key
+- microphone permission denied
+- network websocket failures
+
+## Screenshot Placeholders
+
+![SP-VOICE-01 Chat Composer Voice](images/SP-VOICE-01-chat-composer-voice-controls.png)
+
+`SP-VOICE-01`: message composer with mic and vocal-mode toggle.
+
+![SP-VOICE-02 Listening State](images/SP-VOICE-02-listening-status-row.png)
+
+`SP-VOICE-02`: listening/processing status banner.
+
+![SP-VOICE-03 Auto Speak](images/SP-VOICE-03-auto-speak-reply.png)
+
+`SP-VOICE-03`: voice mode enabled and reply spoken.

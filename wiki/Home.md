@@ -1,26 +1,43 @@
 # Lumi Agent Wiki
 
-Lumi Agent is a macOS AI agent platform with multi-agent chat, tool execution, screen control, and voice workflows.
+Lumi Agent is a macOS-first autonomous agent platform: multi-agent chat, tool execution, desktop control, permissions management, and voice workflows.
 
-## Start Here
+## Documentation Map
 
-- [Installation & Build](Installation-and-Build)
-- [Settings & Permissions](Settings-and-Permissions)
-- [Agent Space & Chat](Agent-Space-and-Chat)
+- [Getting Started](Getting-Started)
+- [Architecture Deep Dive](Architecture-Deep-Dive)
+- [Agent Space and Conversation Model](Agent-Space-and-Conversation-Model)
+- [Agent Mode and Screen Control](Agent-Mode-and-Screen-Control)
 - [Quick Actions Overlay](Quick-Actions-Overlay)
-- [Voice Mode (Whisper + TTS)](Voice-Mode)
-- [Auto Update & Deployment](Auto-Update-and-Deployment)
+- [Voice Mode (Realtime + Whisper + TTS)](Voice-Mode)
+- [Settings, Permissions, and Security](Settings-Permissions-and-Security)
+- [Tool Catalog and Risk Model](Tool-Catalog-and-Risk-Model)
+- [Automation and Background Flows](Automation-and-Background-Flows)
+- [Build, Update, and Deployment](Build-Update-and-Deployment)
 - [Troubleshooting](Troubleshooting)
+- [Screenshot Placeholders Index](Screenshot-Placeholders-Index)
 
-## Core Concepts
+## Product Scope
 
-- Agents can use tools based on enabled capabilities.
-- Agent Mode enables desktop/screen control tools.
-- Security settings control sudo and risk approval thresholds.
-- Permissions are managed in macOS Privacy & Security and mirrored in Lumi Settings.
+Lumi includes these major operational surfaces:
 
-## Shortcuts
+1. **Agents**: create, configure, and run models with selected tool access.
+2. **Agent Space**: direct and group conversations with tool-enabled responses.
+3. **Quick Actions**: global floating panel for fast context actions (`⌥⌘L`).
+4. **Permissions**: guided macOS privacy onboarding.
+5. **Security**: command restrictions, risk thresholds, sudo policy.
+6. **Voice**: one-tap speech input and spoken responses.
+7. **Automation**: trigger-based background execution.
+
+## Keyboard Shortcuts
 
 - `⌘L`: Open Agent Palette
-- `⌥⌘L`: Open Quick Actions overlay
-- `⌘,`: Open macOS Settings window
+- `⌥⌘L`: Open Quick Actions panel
+- `⌘,`: Open Settings window
+- `⌘N`: New Agent
+
+## Screenshot Placeholder
+
+![SP-HOME-01 Overview](images/SP-HOME-01-overview-dashboard.png)
+
+`SP-HOME-01`: Main window overview showing sidebar, content list, detail panel, and top toolbar.
