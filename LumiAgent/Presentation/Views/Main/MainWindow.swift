@@ -7,6 +7,7 @@
 //  Main window with three-column navigation
 //
 
+#if os(macOS)
 import SwiftUI
 
 // MARK: - Main Window
@@ -105,9 +106,15 @@ struct SidebarView: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        List(SidebarItem.allCases, selection: $appState.selectedSidebarItem) { item in
-            Label(item.rawValue, systemImage: item.icon)
-                .tag(item)
+        List {
+            ForEach(SidebarItem.allCases) { item in
+                Button {
+                    appState.selectedSidebarItem = item
+                } label: {
+                    Label(item.rawValue, systemImage: item.icon)
+                }
+                .listItemTint(appState.selectedSidebarItem == item ? .accentColor : nil)
+            }
         }
         .listStyle(.sidebar)
     }
@@ -125,6 +132,8 @@ struct ContentListView: View {
                 AgentListView()
             case .agentSpace:
                 AgentSpaceView()
+            case .health:
+                HealthListView()
             case .history:
                 ToolHistoryListView()
             case .automation:
@@ -158,6 +167,8 @@ struct DetailView: View {
                 } else {
                     EmptyDetailView(message: "Select or start a conversation")
                 }
+            case .health:
+                HealthDetailView()
             case .history:
                 if let agentId = appState.selectedHistoryAgentId {
                     ToolHistoryDetailView(agentId: agentId)
@@ -911,3 +922,4 @@ struct NewAgentView: View {
         }
     }
 }
+#endif

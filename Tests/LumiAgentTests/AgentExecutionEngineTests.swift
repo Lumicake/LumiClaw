@@ -5,6 +5,7 @@
 //  Created by Lumi Agent on 2026-02-18.
 //
 
+#if os(macOS)
 import XCTest
 @testable import LumiAgent
 
@@ -138,3 +139,4 @@ class MockSessionRepository: SessionRepositoryProtocol {
         Array(sessions.prefix(limit))
     }
 }
+#endif

@@ -7,6 +7,7 @@
 //  Core orchestrator for agent execution - coordinates AI ↔ tool execution
 //
 
+#if os(macOS)
 import Foundation
 import Combine
 
@@ -270,3 +271,4 @@ enum ExecutionError: Error, LocalizedError {
         }
     }
 }
+#endif

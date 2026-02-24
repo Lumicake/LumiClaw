@@ -5,6 +5,7 @@
 //  Created by Lumi Agent on 2026-02-18.
 //
 
+#if os(macOS)
 import SwiftUI
 
 // MARK: - Focused Values
@@ -19,3 +20,4 @@ extension FocusedValues {
         set { self[ExecutionEngineFocusedValueKey.self] = newValue }
     }
 }
+#endif

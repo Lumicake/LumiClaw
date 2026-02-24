@@ -5,6 +5,7 @@
 //  Created by Lumi Agent on 2026-02-18.
 //
 
+#if os(macOS)
 import SwiftUI
 
 struct AgentExecutionView: View {
@@ -23,7 +24,7 @@ struct AgentExecutionView: View {
                 }
             }
             .padding()
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(Color.secondary.opacity(0.08))
 
             Divider()
 
@@ -40,7 +41,7 @@ struct AgentExecutionView: View {
                     }
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .onChange(of: executionEngine.currentSession?.steps.count) {
+                    .onChange(of: executionEngine.currentSession?.steps.count) { _ in
                         if let lastStep = executionEngine.currentSession?.steps.last {
                             withAnimation {
                                 proxy.scrollTo(lastStep.id, anchor: .bottom)
@@ -49,7 +50,7 @@ struct AgentExecutionView: View {
                     }
                 }
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Color.primary.opacity(0.03))
             .font(.system(.body, design: .monospaced))
         }
     }
@@ -96,3 +97,4 @@ struct ExecutionStepRow: View {
         }
     }
 }
+#endif

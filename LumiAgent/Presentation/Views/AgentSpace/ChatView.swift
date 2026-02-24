@@ -5,6 +5,7 @@
 //  Chat interface with @mention routing and streaming responses.
 //
 
+#if os(macOS)
 import SwiftUI
 
 // MARK: - Chat View
@@ -548,3 +549,4 @@ struct MessageInputView: View {
         mentionQuery = nil
     }
 }
+#endif

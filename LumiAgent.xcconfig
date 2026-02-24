@@ -4,11 +4,27 @@ PRODUCT_NAME = LumiAgent
 MACOSX_DEPLOYMENT_TARGET = 14.0
 SWIFT_VERSION = 5.9
 
+// Platform - macOS ONLY
+SUPPORTED_PLATFORMS = macosx
+TARGETED_DEVICE_FAMILY = 2
+
 // App Info
 INFOPLIST_KEY_CFBundleDisplayName = Lumi Agent
 INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.developer-tools
 INFOPLIST_KEY_NSHumanReadableCopyright = Copyright © 2026 Lumi Agent
 
+// Info.plist and Entitlements
+INFOPLIST_FILE = Info.plist
+CODE_SIGN_ENTITLEMENTS = LumiAgent.entitlements
+
 // Capabilities
 CODE_SIGN_STYLE = Automatic
 ENABLE_HARDENED_RUNTIME = YES
+// Ensure we're using AppKit, not UIKit
+INFOPLIST_KEY_NSPrincipalClass = NSApplication
+INFOPLIST_KEY_LSUIElement = NO
+
+// Disable Catalyst
+SUPPORTS_MACCATALYST = NO
+SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO
+

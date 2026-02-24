@@ -7,6 +7,7 @@
 //  Communicates with privileged helper via XPC for sudo operations
 //
 
+#if os(macOS)
 import Foundation
 
 // MARK: - Privileged Executor
@@ -84,3 +85,4 @@ enum PrivilegedExecutorError: Error, LocalizedError {
         }
     }
 }
+#endif

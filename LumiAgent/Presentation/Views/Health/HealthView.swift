@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import HealthKit
 
 // MARK: - Health Category
 
@@ -42,6 +41,9 @@ enum HealthCategory: String, CaseIterable, Identifiable {
         }
     }
 }
+
+#if os(macOS)
+import HealthKit
 
 // MARK: - Health Metric
 
@@ -917,3 +919,4 @@ struct HealthMiniChart: View {
         .animation(.easeInOut(duration: 0.3), value: data.map(\.value))
     }
 }
+#endif

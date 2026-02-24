@@ -7,6 +7,7 @@
 //  all application windows on every Space.
 //
 
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -124,3 +125,4 @@ struct ScreenControlHUDView: View {
         .onAppear { pulse = true }
     }
 }
+#endif

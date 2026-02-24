@@ -5,6 +5,7 @@
 //  Created by Lumi Agent on 2026-02-18.
 //
 
+#if os(macOS)
 import SwiftUI
 
 // MARK: - Tool name formatter
@@ -605,3 +606,4 @@ struct FlowLayout: Layout {
         }
     }
 }
+#endif

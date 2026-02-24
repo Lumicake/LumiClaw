@@ -7,6 +7,7 @@
 //  with Agent Mode active by default.
 //
 
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -299,3 +300,4 @@ private struct PaletteAgentChip: View {
         .buttonStyle(.plain)
     }
 }
+#endif

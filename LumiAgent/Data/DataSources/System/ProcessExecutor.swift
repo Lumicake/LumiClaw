@@ -7,6 +7,7 @@
 //  Executes non-privileged commands within sandbox
 //
 
+#if os(macOS)
 import Foundation
 
 // MARK: - Process Executor
@@ -128,3 +129,4 @@ struct CommandExecutionResult {
     let error: String?
     let executionTime: TimeInterval?
 }
+#endif

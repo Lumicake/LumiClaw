@@ -7,6 +7,7 @@
 //  Real implementations for all MCP tool handlers
 //
 
+#if os(macOS)
 import Foundation
 import AppKit
 
@@ -1066,4 +1067,4 @@ enum ScreenControlTools {
         }
     }
 }
-
+#endif

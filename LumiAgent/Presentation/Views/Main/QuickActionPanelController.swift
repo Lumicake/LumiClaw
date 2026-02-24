@@ -2,10 +2,8 @@
 //  QuickActionPanelController.swift
 //  LumiAgent
 //
-//  A floating Quick Actions toolbar on the right edge of the screen (Ctrl+L).
-//  Styled as a vertical sidebar strip with labeled icon buttons.
-//  Actions capture a screenshot and dispatch to the default agent
-//  without stealing focus or showing the screen-control overlay.
+//  A glass morphism Quick Actions panel (Ctrl+L) centered on screen.
+//  On action click, displays agent reply in a glass bubble at upper right corner.
 //
 
 #if os(macOS)
@@ -47,7 +45,7 @@ enum QuickActionType: String, CaseIterable {
     }
 }
 
-// MARK: - Toolbar Controller
+// MARK: - Quick Action Panel Controller
 
 final class QuickActionPanelController: NSObject {
     static let shared = QuickActionPanelController()
@@ -56,8 +54,6 @@ final class QuickActionPanelController: NSObject {
     private var onAction: ((QuickActionType) -> Void)?
 
     var isVisible: Bool { panel?.isVisible ?? false }
-
-    // MARK: Public API
 
     func show(onAction: @escaping (QuickActionType) -> Void) {
         guard panel == nil else { return }
@@ -68,7 +64,7 @@ final class QuickActionPanelController: NSObject {
     func hide() {
         guard let panel else { return }
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.12
+            ctx.duration = 0.15
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             self?.panel?.orderOut(nil)
@@ -87,15 +83,14 @@ final class QuickActionPanelController: NSObject {
 
     func triggerAction(_ type: QuickActionType) {
         onAction?(type)
+        hide()
     }
-
-    // MARK: Private
 
     private func createPanel() {
         let panelWidth: CGFloat = 320
         let panelHeight: CGFloat = 280
 
-        let view = QuickActionToolbar(controller: self)
+        let view = QuickActionPanelView(controller: self)
         let hosting = NSHostingView(rootView: view)
         hosting.setFrameSize(NSSize(width: panelWidth, height: panelHeight))
 
@@ -110,24 +105,23 @@ final class QuickActionPanelController: NSObject {
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = false
-        p.isMovableByWindowBackground = true
+        p.isMovableByWindowBackground = false
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         p.isReleasedWhenClosed = false
 
-        // Center of screen
         guard let screen = NSScreen.main else { return }
         let sf = screen.visibleFrame
         let origin = NSPoint(
             x: sf.midX - panelWidth / 2,
             y: sf.midY - panelHeight / 2
         )
-
         p.setFrameOrigin(origin)
         p.alphaValue = 0
         p.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.15
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             p.animator().alphaValue = 1
         }
 
@@ -135,9 +129,78 @@ final class QuickActionPanelController: NSObject {
     }
 }
 
-// MARK: - Toolbar View
+// MARK: - Agent Reply Bubble Controller
 
-struct QuickActionToolbar: View {
+final class AgentReplyBubbleController: NSObject {
+    static let shared = AgentReplyBubbleController()
+
+    private var panel: NSPanel?
+    private var dismissTimer: Timer?
+
+    func show(initialText: String = "") {
+        guard panel == nil else { return }
+        createPanel(initialText: initialText)
+    }
+
+    func hide() {
+        guard let panel else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            self?.panel?.orderOut(nil)
+            self?.panel = nil
+        }
+    }
+
+    func updateText(_ text: String) {
+        guard let panel = panel,
+              let hosting = panel.contentView as? NSHostingView<AgentReplyBubbleView> else { return }
+        hosting.rootView.updateText(text)
+    }
+
+    private func createPanel(initialText: String) {
+        let bubbleView = AgentReplyBubbleView(text: initialText)
+        let hosting = NSHostingView(rootView: bubbleView)
+        hosting.setFrameSize(NSSize(width: 320, height: 200))
+
+        let p = NSPanel(
+            contentRect: NSRect(origin: .zero, size: NSSize(width: 320, height: 200)),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        p.contentView = hosting
+        p.level = .floating
+        p.backgroundColor = .clear
+        p.isOpaque = false
+        p.hasShadow = false
+        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        p.isReleasedWhenClosed = false
+
+        guard let screen = NSScreen.main else { return }
+        let sf = screen.visibleFrame
+        // Upper right corner, with padding
+        let origin = NSPoint(
+            x: sf.maxX - 320 - 16,
+            y: sf.maxY - 200 - 16
+        )
+        p.setFrameOrigin(origin)
+        p.alphaValue = 0
+        p.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            p.animator().alphaValue = 1
+        }
+
+        panel = p
+    }
+}
+
+// MARK: - Quick Action Panel View
+
+struct QuickActionPanelView: View {
     let controller: QuickActionPanelController
 
     var body: some View {
@@ -152,7 +215,7 @@ struct QuickActionToolbar: View {
                 if index > 0 {
                     Divider().padding(.horizontal, 16)
                 }
-                QuickActionToolbarButton(action: action) {
+                QuickActionButton(action: action) {
                     controller.triggerAction(action)
                 }
             }
@@ -161,18 +224,17 @@ struct QuickActionToolbar: View {
         }
         .frame(width: 320, height: 280)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(NSColor.windowBackgroundColor))
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThickMaterial)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(0.5), radius: 20, x: 0, y: 8)
         )
     }
 }
 
-struct QuickActionToolbarButton: View {
+struct QuickActionButton: View {
     let action: QuickActionType
     let onTap: () -> Void
 
@@ -217,6 +279,48 @@ struct QuickActionToolbarButton: View {
                 isHovering = hovering
             }
         }
+    }
+}
+
+// MARK: - Agent Reply Bubble View
+
+struct AgentReplyBubbleView: View {
+    @State var text: String
+
+    func updateText(_ newText: String) {
+        text = newText
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text("Lumi Agent")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+            }
+
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.primary)
+                    .lineLimit(nil)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(12)
+        .frame(width: 320, height: 200)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThickMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+        )
     }
 }
 #endif

@@ -7,6 +7,7 @@
 //  Wi-Fi network joins, and time-based schedules.
 //
 
+#if os(macOS)
 import AppKit
 import Foundation
 
@@ -211,3 +212,4 @@ final class AutomationEngine {
         return names
     }
 }
+#endif

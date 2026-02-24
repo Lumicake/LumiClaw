@@ -19,6 +19,8 @@
 //  entitlement (com.apple.security.network.server) to the entitlements file.
 //
 
+#if os(macOS)
+import AppKit
 import Foundation
 import Network
 
@@ -517,3 +519,4 @@ private struct RemoteResponseMessage: Codable {
         self.imageData = imageData
     }
 }
+#endif

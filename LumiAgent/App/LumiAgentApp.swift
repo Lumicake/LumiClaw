@@ -324,6 +324,11 @@ class AppState: ObservableObject {
             return
         }
 
+        // Show the corner reply bubble immediately
+        DispatchQueue.main.async {
+            AgentReplyBubbleController.shared.show(initialText: "Processing...")
+        }
+
         // Run entirely in the background — no focus steal, no screen-control overlay.
         // The agent acts directly on the current page.
         Task {
@@ -775,6 +780,10 @@ class AppState: ObservableObject {
             if let ci = conversations.firstIndex(where: { $0.id == conversationId }),
                let mi = conversations[ci].messages.firstIndex(where: { $0.id == placeholderId }) {
                 conversations[ci].messages[mi].content = text
+            }
+            // Also update the corner reply bubble if it's showing (for quick actions)
+            DispatchQueue.main.async {
+                AgentReplyBubbleController.shared.updateText(text)
             }
         }
 

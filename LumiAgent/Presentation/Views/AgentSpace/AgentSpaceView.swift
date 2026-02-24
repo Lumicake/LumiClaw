@@ -5,6 +5,7 @@
 //  Conversation list sidebar for Agent Space.
 //
 
+#if os(macOS)
 import SwiftUI
 
 // MARK: - Agent Space View (conversation list column)
@@ -279,3 +280,4 @@ struct NewConversationView: View {
         }
     }
 }
+#endif

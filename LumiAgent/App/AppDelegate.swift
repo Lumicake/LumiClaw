@@ -5,6 +5,7 @@
 //  Created by Lumi Agent on 2026-02-18.
 //
 
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -35,3 +36,4 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 }
+#endif
