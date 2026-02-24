@@ -256,7 +256,7 @@ final class AgentReplyBubbleController: NSObject {
 
         let p = NSPanel(
             contentRect: NSRect(origin: .zero, size: NSSize(width: 360, height: 250)),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
@@ -265,8 +265,9 @@ final class AgentReplyBubbleController: NSObject {
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = false
-        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .transient]
         p.isReleasedWhenClosed = false
+        p.acceptsMouseMovedEvents = true
 
         guard let screen = NSScreen.main else { return }
         let sf = screen.visibleFrame
